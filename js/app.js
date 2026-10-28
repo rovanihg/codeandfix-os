@@ -155,16 +155,19 @@ function configurarEventosUI() {
     });
   });
 
-  // Modais
+  // Abrir Modal de Criação de OS
   document.getElementById('btn-nova-os').addEventListener('click', () => {
     document.getElementById('form-os').reset();
+    document.getElementById('os-id').value = '';
     signaturePadInstance.clear();
     document.getElementById('os-custo-peca').value = '0.00';
     document.getElementById('os-mao-obra').value = '0.00';
     document.getElementById('os-valor-total').value = '0.00';
+    document.getElementById('modal-os-title').textContent = 'Nova Ordem de Serviço';
     document.getElementById('modal-os').classList.remove('hidden');
   });
 
+  // Abrir Modal Caixa
   document.getElementById('btn-novo-lancamento').addEventListener('click', () => {
     document.getElementById('form-caixa').reset();
     document.getElementById('caixa-data').value = new Date().toISOString().split('T')[0];
@@ -195,11 +198,13 @@ function configurarEventosUI() {
   document.getElementById('os-custo-peca').addEventListener('input', calcTotal);
   document.getElementById('os-mao-obra').addEventListener('input', calcTotal);
 
-  // Submissão OS
+  // Submissão OS (Criação ou Atualização)
   document.getElementById('form-os').addEventListener('submit', async (e) => {
     e.preventDefault();
     const p = parseFloat(document.getElementById('os-custo-peca').value) || 0;
     const m = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+    const idExistente = document.getElementById('os-id').value;
+    const novaAssinatura = signaturePadInstance.getDataURL();
 
     const osData = {
       cliente: document.getElementById('os-cliente').value,
@@ -210,9 +215,16 @@ function configurarEventosUI() {
       laudo: document.getElementById('os-laudo').value,
       custo_peca: p,
       mao_obra: m,
-      total: p + m,
-      assinatura: signaturePadInstance.getDataURL()
+      total: p + m
     };
+
+    if (idExistente) {
+      osData.id = idExistente;
+    }
+
+    if (novaAssinatura) {
+      osData.assinatura = novaAssinatura;
+    }
 
     await DataService.saveOS(osData);
     document.getElementById('modal-os').classList.add('hidden');
@@ -238,8 +250,8 @@ function configurarEventosUI() {
   document.getElementById('form-supabase-config').addEventListener('submit', async (e) => {
     e.preventDefault();
     DataService.saveConfig(
-      document.getElementById('supabase-url').value,
-      document.getElementById('supabase-key').value
+        document.getElementById('supabase-url').value,
+        document.getElementById('supabase-key').value
     );
     document.getElementById('modal-sync').classList.add('hidden');
     window.location.reload();
@@ -322,14 +334,41 @@ function renderizarTabelaOS(ordens) {
       <td class="p-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-semibold ${obterBadgeStatus(os.status)}">${os.status}</span></td>
       <td class="p-3.5 font-mono font-semibold">${formatarMoeda(total)}</td>
       <td class="p-3.5 text-right space-x-1">
-        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
-        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${ordens.length - idx})" class="p-1 hover:text-cyan-400"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
+        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS" class="p-1 hover:text-cyan-400">
+          <i data-lucide="edit-3" class="w-4 h-4 inline"></i>
+        </button>
+        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400">
+          <i data-lucide="message-circle" class="w-4 h-4 inline"></i>
+        </button>
+        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${ordens.length - idx})" title="Imprimir Recibo" class="p-1 hover:text-slate-300">
+          <i data-lucide="printer" class="w-4 h-4 inline"></i>
+        </button>
       </td>
     `;
     tbody.appendChild(tr);
   });
   if (window.lucide) lucide.createIcons();
 }
+
+window.editarOS = function(json) {
+  const os = JSON.parse(decodeURIComponent(json));
+
+  document.getElementById('os-id').value = os.id || '';
+  document.getElementById('os-cliente').value = os.cliente || '';
+  document.getElementById('os-telefone').value = os.telefone || '';
+  document.getElementById('os-aparelho').value = os.aparelho || '';
+  document.getElementById('os-status').value = os.status || 'Em Análise';
+  document.getElementById('os-defeito').value = os.defeito || '';
+  document.getElementById('os-laudo').value = os.laudo || '';
+  document.getElementById('os-custo-peca').value = parseFloat(os.custo_peca || 0).toFixed(2);
+  document.getElementById('os-mao-obra').value = parseFloat(os.mao_obra || 0).toFixed(2);
+  document.getElementById('os-valor-total').value = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+
+  signaturePadInstance.clear();
+
+  document.getElementById('modal-os-title').textContent = 'Editar Ordem de Serviço';
+  document.getElementById('modal-os').classList.remove('hidden');
+};
 
 function renderizarTabelaCaixa(caixa) {
   const tbody = document.getElementById('tabela-caixa-body');
@@ -359,13 +398,13 @@ window.abrirWhatsAppOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
   const fone = os.telefone.startsWith('55') ? os.telefone : `55${os.telefone}`;
   const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
-  const msg = 
-    `*CODE & FIX - Assistência Técnica*\n\n` +
-    `Olá, *${os.cliente}*!\n` +
-    `Status do seu aparelho (*${os.aparelho}*): *${os.status}*\n\n` +
-    `*Diagnóstico:* ${os.laudo || 'Em análise'}\n` +
-    `*Valor Total:* R$ ${total}\n\n` +
-    `Garantia legal de 90 dias após a retirada. Qualquer dúvida estamos à disposição!`;
+  const msg =
+      `*CODE & FIX - Assistência Técnica*\n\n` +
+      `Olá, *${os.cliente}*!\n` +
+      `Status do seu aparelho (*${os.aparelho}*): *${os.status}*\n\n` +
+      `*Diagnóstico:* ${os.laudo || 'Em análise'}\n` +
+      `*Valor Total:* R$ ${total}\n\n` +
+      `Garantia legal de 90 dias após a retirada. Qualquer dúvida estamos à disposição!`;
   window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msg)}`, '_blank');
 };
 
@@ -451,6 +490,7 @@ function formatarData(d) {
 function obterBadgeStatus(s) {
   switch (s) {
     case 'Em Análise': return 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
+    case 'Aguardando Aprovação': return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
     case 'Aguardando Peça': return 'bg-orange-500/10 text-orange-400 border border-orange-500/30';
     case 'Pronto para Retirada': return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
     case 'Entregue / Concluído': return 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30';

@@ -12,14 +12,15 @@ const DataService = {
       try {
         this.supabase = window.supabase.createClient(config.url, config.key);
         this.isCloud = true;
+        return true;
       } catch (err) {
         console.warn('Erro ao conectar ao Supabase:', err);
         this.isCloud = false;
+        return false;
       }
-    } else {
-      this.isCloud = false;
     }
-    return this.isCloud;
+    this.isCloud = false;
+    return false;
   },
 
   getConfig() {
@@ -68,13 +69,13 @@ const DataService = {
     this.currentUser = null;
   },
 
-  // Operações de OS
+  // Operações de OS (Criação e Edição)
   async getOS() {
     if (this.isCloud && this.currentUser) {
       const { data, error } = await this.supabase
-        .from('ordens_servico')
-        .select('*')
-        .order('created_at', { ascending: false });
+          .from('ordens_servico')
+          .select('*')
+          .order('created_at', { ascending: false });
       if (!error && data) return data;
     }
     return JSON.parse(localStorage.getItem('codefix_os_store') || '[]');
@@ -83,21 +84,35 @@ const DataService = {
   async saveOS(osData) {
     if (this.isCloud && this.currentUser) {
       osData.user_id = this.currentUser.id;
-      if (osData.id && typeof osData.id === 'string' && osData.id.length > 20) {
-        const { error } = await this.supabase.from('ordens_servico').update(osData).eq('id', osData.id);
+
+      // Se tiver id, realiza a atualização (UPDATE)
+      if (osData.id) {
+        const idAtualizar = osData.id;
+        delete osData.id;
+        const { error } = await this.supabase
+            .from('ordens_servico')
+            .update(osData)
+            .eq('id', idAtualizar);
         if (!error) return true;
+        console.error('Erro ao atualizar OS no Supabase:', error);
       } else {
+        // Se não tiver id, realiza inserção (INSERT)
         delete osData.id;
         const { error } = await this.supabase.from('ordens_servico').insert([osData]);
         if (!error) return true;
+        console.error('Erro ao inserir OS no Supabase:', error);
       }
     }
 
+    // Fallback LocalStorage
     const list = JSON.parse(localStorage.getItem('codefix_os_store') || '[]');
     if (osData.id) {
       const idx = list.findIndex(item => item.id == osData.id);
-      if (idx !== -1) list[idx] = osData;
-      else list.push(osData);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...osData };
+      } else {
+        list.push(osData);
+      }
     } else {
       osData.id = Date.now();
       osData.created_at = new Date().toISOString();
@@ -111,9 +126,9 @@ const DataService = {
   async getCaixa() {
     if (this.isCloud && this.currentUser) {
       const { data, error } = await this.supabase
-        .from('livro_caixa')
-        .select('*')
-        .order('data', { ascending: false });
+          .from('livro_caixa')
+          .select('*')
+          .order('data', { ascending: false });
       if (!error && data) return data;
     }
     return JSON.parse(localStorage.getItem('codefix_caixa_store') || '[]');
@@ -125,6 +140,7 @@ const DataService = {
       delete txData.id;
       const { error } = await this.supabase.from('livro_caixa').insert([txData]);
       if (!error) return true;
+      console.error('Erro ao salvar no Caixa:', error);
     }
 
     const list = JSON.parse(localStorage.getItem('codefix_caixa_store') || '[]');
