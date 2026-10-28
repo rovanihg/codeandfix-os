@@ -1,0 +1,107 @@
+@charset "UTF-8";
+
+.form-input {
+  width: 100%;
+  background-color: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgb(51, 65, 85);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  color: rgb(241, 245, 249);
+  outline: none;
+  transition: border-color 0.15s ease-in-out;
+}
+
+.form-input:focus {
+  border-color: rgb(6, 182, 212);
+  box-shadow: 0 0 0 1px rgb(6, 182, 212);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 1rem;
+}
+
+.active-tab {
+  background-color: rgb(6, 182, 212);
+  color: #ffffff !important;
+}
+
+/* Regras de Impressão */
+@media print {
+  header, main, .modal-backdrop, #auth-screen, nav {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: monospace, Arial, sans-serif !important;
+    padding: 0 !important;
+  }
+
+  #receipt-print-area {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 20px;
+  }
+
+  .receipt-container {
+    max-width: 700px;
+    margin: 0 auto;
+    border: 1px dashed #000;
+    padding: 20px;
+  }
+
+  .receipt-header {
+    text-align: center;
+    margin-bottom: 12px;
+  }
+
+  .receipt-id {
+    font-size: 14px;
+    font-weight: bold;
+    margin-top: 5px;
+  }
+
+  .receipt-section {
+    font-size: 12px;
+    line-height: 1.6;
+    margin: 8px 0;
+  }
+
+  .receipt-total {
+    font-size: 14px;
+    margin-top: 5px;
+  }
+
+  .receipt-warranty {
+    font-size: 10px;
+    margin-top: 15px;
+    line-height: 1.4;
+    text-align: justify;
+  }
+
+  .receipt-signatures {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 40px;
+  }
+
+  .signature-line {
+    width: 45%;
+    border-top: 1px solid #000;
+    text-align: center;
+    font-size: 11px;
+    padding-top: 4px;
+  }
+}
