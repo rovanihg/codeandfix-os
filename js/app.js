@@ -331,7 +331,15 @@ function renderizarTabelaOS(ordens) {
       <td class="p-3.5 font-mono text-cyan-400">#${String(ordens.length - idx).padStart(3, '0')}</td>
       <td class="p-3.5 font-medium text-slate-200">${os.cliente}</td>
       <td class="p-3.5">${os.aparelho}</td>
-      <td class="p-3.5"><span class="px-2 py-0.5 rounded text-[10px] font-semibold ${obterBadgeStatus(os.status)}">${os.status}</span></td>
+      <td class="p-3.5">
+        <select onchange="atualizarStatusRapido('${os.id}', this.value)" class="bg-slate-900 border border-slate-700 text-[11px] font-semibold rounded px-2 py-1 outline-none cursor-pointer ${obterCorTextoStatus(os.status)}">
+          <option value="Em Análise" ${os.status === 'Em Análise' ? 'selected' : ''}>Em Análise</option>
+          <option value="Aguardando Aprovação" ${os.status === 'Aguardando Aprovação' ? 'selected' : ''}>Aguardando Aprovação</option>
+          <option value="Aguardando Peça" ${os.status === 'Aguardando Peça' ? 'selected' : ''}>Aguardando Peça</option>
+          <option value="Pronto para Retirada" ${os.status === 'Pronto para Retirada' ? 'selected' : ''}>Pronto para Retirada</option>
+          <option value="Entregue / Concluído" ${os.status === 'Entregue / Concluído' ? 'selected' : ''}>Entregue / Concluído</option>
+        </select>
+      </td>
       <td class="p-3.5 font-mono font-semibold">${formatarMoeda(total)}</td>
       <td class="p-3.5 text-right space-x-1">
         <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS" class="p-1 hover:text-cyan-400">
@@ -495,5 +503,21 @@ function obterBadgeStatus(s) {
     case 'Pronto para Retirada': return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
     case 'Entregue / Concluído': return 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30';
     default: return 'bg-slate-700 text-slate-300';
+  }
+}
+
+window.atualizarStatusRapido = async function(id, novoStatus) {
+  await DataService.saveOS({ id: id, status: novoStatus });
+  await carregarTudo();
+};
+
+function obterCorTextoStatus(status) {
+  switch (status) {
+    case 'Em Análise': return 'text-amber-400 border-amber-500/30';
+    case 'Aguardando Aprovação': return 'text-blue-400 border-blue-500/30';
+    case 'Aguardando Peça': return 'text-orange-400 border-orange-500/30';
+    case 'Pronto para Retirada': return 'text-emerald-400 border-emerald-500/30';
+    case 'Entregue / Concluído': return 'text-cyan-400 border-cyan-500/30';
+    default: return 'text-slate-300';
   }
 }
