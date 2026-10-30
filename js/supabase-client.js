@@ -1,5 +1,5 @@
 /**
- * DataService - Camada de Persistência com Autenticação e Fallback Local
+ * DataService - Camada de Persistência com Exclusão, Atualização e Nuvem
  */
 const DataService = {
   supabase: null,
@@ -69,7 +69,9 @@ const DataService = {
     this.currentUser = null;
   },
 
-  // Operações de OS (Criação e Edição)
+  // ==========================================
+  // OPERAÇÕES DE OS (GET, SAVE, DELETE)
+  // ==========================================
   async getOS() {
     if (this.isCloud && this.currentUser) {
       const { data, error } = await this.supabase
@@ -85,7 +87,6 @@ const DataService = {
     if (this.isCloud && this.currentUser) {
       osData.user_id = this.currentUser.id;
 
-      // Se tiver id, realiza a atualização (UPDATE)
       if (osData.id) {
         const idAtualizar = osData.id;
         delete osData.id;
@@ -96,7 +97,6 @@ const DataService = {
         if (!error) return true;
         console.error('Erro ao atualizar OS no Supabase:', error);
       } else {
-        // Se não tiver id, realiza inserção (INSERT)
         delete osData.id;
         const { error } = await this.supabase.from('ordens_servico').insert([osData]);
         if (!error) return true;
@@ -122,7 +122,24 @@ const DataService = {
     return true;
   },
 
-  // Operações do Caixa
+  async deleteOS(id) {
+    if (this.isCloud && this.currentUser) {
+      const { error } = await this.supabase
+          .from('ordens_servico')
+          .delete()
+          .eq('id', id);
+      if (error) console.error('Erro ao excluir OS no Supabase:', error);
+    }
+
+    let list = JSON.parse(localStorage.getItem('codefix_os_store') || '[]');
+    list = list.filter(item => item.id != id);
+    localStorage.setItem('codefix_os_store', JSON.stringify(list));
+    return true;
+  },
+
+  // ==========================================
+  // OPERAÇÕES DO LIVRO CAIXA (GET, SAVE, DELETE)
+  // ==========================================
   async getCaixa() {
     if (this.isCloud && this.currentUser) {
       const { data, error } = await this.supabase
@@ -137,15 +154,51 @@ const DataService = {
   async saveLancamento(txData) {
     if (this.isCloud && this.currentUser) {
       txData.user_id = this.currentUser.id;
-      delete txData.id;
-      const { error } = await this.supabase.from('livro_caixa').insert([txData]);
-      if (!error) return true;
-      console.error('Erro ao salvar no Caixa:', error);
+
+      if (txData.id) {
+        const idAtualizar = txData.id;
+        delete txData.id;
+        const { error } = await this.supabase
+            .from('livro_caixa')
+            .update(txData)
+            .eq('id', idAtualizar);
+        if (!error) return true;
+        console.error('Erro ao atualizar lançamento no Supabase:', error);
+      } else {
+        delete txData.id;
+        const { error } = await this.supabase.from('livro_caixa').insert([txData]);
+        if (!error) return true;
+        console.error('Erro ao inserir no Caixa:', error);
+      }
     }
 
     const list = JSON.parse(localStorage.getItem('codefix_caixa_store') || '[]');
-    txData.id = Date.now();
-    list.unshift(txData);
+    if (txData.id) {
+      const idx = list.findIndex(item => item.id == txData.id);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...txData };
+      } else {
+        list.push(txData);
+      }
+    } else {
+      txData.id = Date.now();
+      list.unshift(txData);
+    }
+    localStorage.setItem('codefix_caixa_store', JSON.stringify(list));
+    return true;
+  },
+
+  async deleteLancamento(id) {
+    if (this.isCloud && this.currentUser) {
+      const { error } = await this.supabase
+          .from('livro_caixa')
+          .delete()
+          .eq('id', id);
+      if (error) console.error('Erro ao excluir no Caixa:', error);
+    }
+
+    let list = JSON.parse(localStorage.getItem('codefix_caixa_store') || '[]');
+    list = list.filter(item => item.id != id);
     localStorage.setItem('codefix_caixa_store', JSON.stringify(list));
     return true;
   }

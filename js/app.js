@@ -1,10 +1,10 @@
 /**
- * App - Controlador Central da Interface, Assinatura e Regras MEI
+ * App - Controlador Central com Edição, Exclusão e Restauração de Assinatura
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
 
-// Classe para gerenciar a assinatura na tela
+// Gestão da Assinatura Digital com Suporte a Carregar Imagem Salva
 class SignaturePad {
   constructor(canvasId, clearBtnId) {
     this.canvas = document.getElementById(canvasId);
@@ -12,10 +12,12 @@ class SignaturePad {
     this.clearBtn = document.getElementById(clearBtnId);
     this.isDrawing = false;
     this.hasData = false;
+    this.currentDataURL = null;
 
     this.ctx.strokeStyle = '#ffffff';
     this.ctx.lineWidth = 2.5;
     this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
 
     this.bindEvents();
   }
@@ -62,15 +64,33 @@ class SignaturePad {
     this.hasData = true;
   }
 
-  stop() { this.isDrawing = false; }
+  stop() {
+    if (this.isDrawing) {
+      this.isDrawing = false;
+      this.currentDataURL = this.canvas.toDataURL('image/png');
+    }
+  }
 
   clear() {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.hasData = false;
+    this.currentDataURL = null;
+  }
+
+  loadDataURL(dataUrl) {
+    this.clear();
+    if (!dataUrl) return;
+    const img = new Image();
+    img.onload = () => {
+      this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+      this.hasData = true;
+      this.currentDataURL = dataUrl;
+    };
+    img.src = dataUrl;
   }
 
   getDataURL() {
-    return this.hasData ? this.canvas.toDataURL('image/png') : null;
+    return this.hasData ? (this.currentDataURL || this.canvas.toDataURL('image/png')) : null;
   }
 }
 
@@ -80,7 +100,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   signaturePadInstance = new SignaturePad('signature-pad', 'btn-clear-sig');
   const isCloud = DataService.init();
 
-  // Verificar se há sessão ativa
   const logged = await DataService.checkSession();
   if (logged) {
     mostrarAppPrincipal(true);
@@ -155,7 +174,7 @@ function configurarEventosUI() {
     });
   });
 
-  // Abrir Modal de Criação de OS
+  // Modal Nova OS
   document.getElementById('btn-nova-os').addEventListener('click', () => {
     document.getElementById('form-os').reset();
     document.getElementById('os-id').value = '';
@@ -167,13 +186,17 @@ function configurarEventosUI() {
     document.getElementById('modal-os').classList.remove('hidden');
   });
 
-  // Abrir Modal Caixa
+  // Modal Novo Lançamento Caixa
   document.getElementById('btn-novo-lancamento').addEventListener('click', () => {
     document.getElementById('form-caixa').reset();
+    document.getElementById('caixa-id').value = '';
     document.getElementById('caixa-data').value = new Date().toISOString().split('T')[0];
+    const tituloCaixa = document.querySelector('#modal-caixa h3');
+    if (tituloCaixa) tituloCaixa.textContent = 'Novo Lançamento Financeiro';
     document.getElementById('modal-caixa').classList.remove('hidden');
   });
 
+  // Modais de Configuração Nuvem
   const abrirModalSync = () => {
     const cfg = DataService.getConfig();
     document.getElementById('supabase-url').value = cfg.url;
@@ -183,6 +206,7 @@ function configurarEventosUI() {
   document.getElementById('btn-sync-settings').addEventListener('click', abrirModalSync);
   document.getElementById('btn-open-sync-login').addEventListener('click', abrirModalSync);
 
+  // Fechar Modais
   document.querySelectorAll('.btn-close-modal').forEach(b => {
     b.addEventListener('click', () => {
       document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.add('hidden'));
@@ -198,13 +222,13 @@ function configurarEventosUI() {
   document.getElementById('os-custo-peca').addEventListener('input', calcTotal);
   document.getElementById('os-mao-obra').addEventListener('input', calcTotal);
 
-  // Submissão OS (Criação ou Atualização)
+  // Submissão OS
   document.getElementById('form-os').addEventListener('submit', async (e) => {
     e.preventDefault();
     const p = parseFloat(document.getElementById('os-custo-peca').value) || 0;
     const m = parseFloat(document.getElementById('os-mao-obra').value) || 0;
     const idExistente = document.getElementById('os-id').value;
-    const novaAssinatura = signaturePadInstance.getDataURL();
+    const assinaturaData = signaturePadInstance.getDataURL();
 
     const osData = {
       cliente: document.getElementById('os-cliente').value,
@@ -215,15 +239,12 @@ function configurarEventosUI() {
       laudo: document.getElementById('os-laudo').value,
       custo_peca: p,
       mao_obra: m,
-      total: p + m
+      total: p + m,
+      assinatura: assinaturaData
     };
 
     if (idExistente) {
       osData.id = idExistente;
-    }
-
-    if (novaAssinatura) {
-      osData.assinatura = novaAssinatura;
     }
 
     await DataService.saveOS(osData);
@@ -234,6 +255,8 @@ function configurarEventosUI() {
   // Submissão Caixa
   document.getElementById('form-caixa').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const idExistente = document.getElementById('caixa-id').value;
+
     const tx = {
       tipo: document.getElementById('caixa-tipo').value,
       categoria: document.getElementById('caixa-categoria').value,
@@ -241,6 +264,11 @@ function configurarEventosUI() {
       data: document.getElementById('caixa-data').value,
       valor: parseFloat(document.getElementById('caixa-valor').value) || 0
     };
+
+    if (idExistente) {
+      tx.id = idExistente;
+    }
+
     await DataService.saveLancamento(tx);
     document.getElementById('modal-caixa').classList.add('hidden');
     await carregarTudo();
@@ -342,15 +370,10 @@ function renderizarTabelaOS(ordens) {
       </td>
       <td class="p-3.5 font-mono font-semibold">${formatarMoeda(total)}</td>
       <td class="p-3.5 text-right space-x-1">
-        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS" class="p-1 hover:text-cyan-400">
-          <i data-lucide="edit-3" class="w-4 h-4 inline"></i>
-        </button>
-        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400">
-          <i data-lucide="message-circle" class="w-4 h-4 inline"></i>
-        </button>
-        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${ordens.length - idx})" title="Imprimir Recibo" class="p-1 hover:text-slate-300">
-          <i data-lucide="printer" class="w-4 h-4 inline"></i>
-        </button>
+        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS Completa" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
+        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${ordens.length - idx})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
+        <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -372,10 +395,27 @@ window.editarOS = function(json) {
   document.getElementById('os-mao-obra').value = parseFloat(os.mao_obra || 0).toFixed(2);
   document.getElementById('os-valor-total').value = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
 
-  signaturePadInstance.clear();
+  // Restaura a assinatura existente no Canvas caso ela exista
+  if (os.assinatura) {
+    signaturePadInstance.loadDataURL(os.assinatura);
+  } else {
+    signaturePadInstance.clear();
+  }
 
   document.getElementById('modal-os-title').textContent = 'Editar Ordem de Serviço';
   document.getElementById('modal-os').classList.remove('hidden');
+};
+
+window.excluirOS = async function(id) {
+  if (confirm('Tem certeza de que deseja apagar permanentemente esta Ordem de Serviço?')) {
+    await DataService.deleteOS(id);
+    await carregarTudo();
+  }
+};
+
+window.atualizarStatusRapido = async function(id, novoStatus) {
+  await DataService.saveOS({ id: id, status: novoStatus });
+  await carregarTudo();
 };
 
 function renderizarTabelaCaixa(caixa) {
@@ -397,10 +437,37 @@ function renderizarTabelaCaixa(caixa) {
       <td class="p-3.5 text-right font-mono font-semibold ${isEntrada ? 'text-emerald-400' : 'text-rose-400'}">
         ${isEntrada ? '+' : '-'} ${formatarMoeda(tx.valor)}
       </td>
+      <td class="p-3.5 text-right space-x-1">
+        <button onclick="editarCaixa('${encodeURIComponent(JSON.stringify(tx))}')" title="Editar Lançamento" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="excluirCaixa('${tx.id}')" title="Excluir Lançamento" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
+  if (window.lucide) lucide.createIcons();
 }
+
+window.editarCaixa = function(json) {
+  const tx = JSON.parse(decodeURIComponent(json));
+  document.getElementById('caixa-id').value = tx.id || '';
+  document.getElementById('caixa-tipo').value = tx.tipo || 'entrada';
+  document.getElementById('caixa-categoria').value = tx.categoria || 'Serviço de Bancada';
+  document.getElementById('caixa-descricao').value = tx.descricao || '';
+  document.getElementById('caixa-data').value = tx.data || '';
+  document.getElementById('caixa-valor').value = parseFloat(tx.valor || 0).toFixed(2);
+
+  const tituloCaixa = document.querySelector('#modal-caixa h3');
+  if (tituloCaixa) tituloCaixa.textContent = 'Editar Lançamento Financeiro';
+
+  document.getElementById('modal-caixa').classList.remove('hidden');
+};
+
+window.excluirCaixa = async function(id) {
+  if (confirm('Tem certeza de que deseja apagar este lançamento financeiro?')) {
+    await DataService.deleteLancamento(id);
+    await carregarTudo();
+  }
+};
 
 window.abrirWhatsAppOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
@@ -494,22 +561,6 @@ function formatarData(d) {
   const [ano, mes, dia] = d.split('-');
   return `${dia}/${mes}/${ano}`;
 }
-
-function obterBadgeStatus(s) {
-  switch (s) {
-    case 'Em Análise': return 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
-    case 'Aguardando Aprovação': return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
-    case 'Aguardando Peça': return 'bg-orange-500/10 text-orange-400 border border-orange-500/30';
-    case 'Pronto para Retirada': return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
-    case 'Entregue / Concluído': return 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30';
-    default: return 'bg-slate-700 text-slate-300';
-  }
-}
-
-window.atualizarStatusRapido = async function(id, novoStatus) {
-  await DataService.saveOS({ id: id, status: novoStatus });
-  await carregarTudo();
-};
 
 function obterCorTextoStatus(status) {
   switch (status) {
