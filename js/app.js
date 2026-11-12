@@ -1,10 +1,9 @@
 /**
- * App - Controlador Central com Filtros Avançados, Datas e Relatórios
+ * App - Controlador Central com Controle de Pagamentos, Sinais e Relatórios
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
 
-// Armazena os dados brutos e os filtrados em memória para relatórios instantâneos
 let todasAsOrdens = [];
 let ordensFiltradasAtual = [];
 
@@ -177,7 +176,7 @@ function configurarEventosUI() {
     });
   });
 
-  // Ouvintes dos Filtros de OS (Disparam em tempo real ao digitar ou mudar)
+  // Filtros de OS
   document.getElementById('filtro-os-texto').addEventListener('input', aplicarFiltrosOS);
   document.getElementById('filtro-os-status').addEventListener('change', aplicarFiltrosOS);
   document.getElementById('filtro-os-data-inicio').addEventListener('change', aplicarFiltrosOS);
@@ -191,7 +190,7 @@ function configurarEventosUI() {
     aplicarFiltrosOS();
   });
 
-  // Botões de Relatório de OS
+  // Relatórios OS
   document.getElementById('btn-exportar-os-csv').addEventListener('click', exportarRelatorioOSCSV);
   document.getElementById('btn-imprimir-relatorio-os').addEventListener('click', imprimirRelatorioOS);
 
@@ -203,8 +202,37 @@ function configurarEventosUI() {
     document.getElementById('os-custo-peca').value = '0.00';
     document.getElementById('os-mao-obra').value = '0.00';
     document.getElementById('os-valor-total').value = '0.00';
+    document.getElementById('os-forma-pagamento').value = 'Pendente';
+    document.getElementById('os-valor-pago').value = '0.00';
+    document.getElementById('os-saldo-restante').value = '0.00';
     document.getElementById('modal-os-title').textContent = 'Nova Ordem de Serviço';
     document.getElementById('modal-os').classList.remove('hidden');
+  });
+
+  // Atalho: Lançar Valor Pago da OS direto no Livro Caixa
+  document.getElementById('btn-lancar-caixa-rapido').addEventListener('click', async () => {
+    const valorPago = parseFloat(document.getElementById('os-valor-pago').value) || 0;
+    const cliente = document.getElementById('os-cliente').value || 'Cliente';
+    const aparelho = document.getElementById('os-aparelho').value || 'Aparelho';
+    const forma = document.getElementById('os-forma-pagamento').value;
+
+    if (valorPago <= 0) {
+      alert('Informe um Valor Pago maior que R$ 0,00 para lançar no caixa.');
+      return;
+    }
+
+    if (confirm(`Deseja registrar uma ENTRADA de ${formatarMoeda(valorPago)} (${forma}) referente a ${cliente} no Livro Caixa?`)) {
+      const tx = {
+        tipo: 'entrada',
+        categoria: 'Serviço de Bancada',
+        descricao: `Pagto OS (${forma}) - ${cliente} (${aparelho})`,
+        data: new Date().toISOString().split('T')[0],
+        valor: valorPago
+      };
+      await DataService.saveLancamento(tx);
+      alert('Entrada lançada com sucesso no Livro Caixa MEI!');
+      await carregarTudo();
+    }
   });
 
   // Modal Novo Lançamento Caixa
@@ -217,7 +245,7 @@ function configurarEventosUI() {
     document.getElementById('modal-caixa').classList.remove('hidden');
   });
 
-  // Modais de Configuração Nuvem
+  // Modais Configuração Nuvem
   const abrirModalSync = () => {
     const cfg = DataService.getConfig();
     document.getElementById('supabase-url').value = cfg.url;
@@ -233,20 +261,32 @@ function configurarEventosUI() {
     });
   });
 
-  // Totalizador da OS
-  const calcTotal = () => {
-    const p = parseFloat(document.getElementById('os-custo-peca').value) || 0;
-    const m = parseFloat(document.getElementById('os-mao-obra').value) || 0;
-    document.getElementById('os-valor-total').value = (p + m).toFixed(2);
+  // Cálculo em tempo real: Total OS e Saldo Restante
+  const calcularFinanceiroOS = () => {
+    const peca = parseFloat(document.getElementById('os-custo-peca').value) || 0;
+    const mo = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+    const pago = parseFloat(document.getElementById('os-valor-pago').value) || 0;
+
+    const total = peca + mo;
+    const restante = Math.max(total - pago, 0);
+
+    document.getElementById('os-valor-total').value = total.toFixed(2);
+    document.getElementById('os-saldo-restante').value = restante.toFixed(2);
   };
-  document.getElementById('os-custo-peca').addEventListener('input', calcTotal);
-  document.getElementById('os-mao-obra').addEventListener('input', calcTotal);
+
+  document.getElementById('os-custo-peca').addEventListener('input', calcularFinanceiroOS);
+  document.getElementById('os-mao-obra').addEventListener('input', calcularFinanceiroOS);
+  document.getElementById('os-valor-pago').addEventListener('input', calcularFinanceiroOS);
 
   // Submissão OS
   document.getElementById('form-os').addEventListener('submit', async (e) => {
     e.preventDefault();
     const p = parseFloat(document.getElementById('os-custo-peca').value) || 0;
     const m = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+    const pago = parseFloat(document.getElementById('os-valor-pago').value) || 0;
+    const total = p + m;
+    const restante = Math.max(total - pago, 0);
+
     const idExistente = document.getElementById('os-id').value;
     const assinaturaData = signaturePadInstance.getDataURL();
 
@@ -259,7 +299,10 @@ function configurarEventosUI() {
       laudo: document.getElementById('os-laudo').value,
       custo_peca: p,
       mao_obra: m,
-      total: p + m,
+      total: total,
+      valor_pago: pago,
+      forma_pagamento: document.getElementById('os-forma-pagamento').value,
+      saldo_restante: restante,
       assinatura: assinaturaData
     };
 
@@ -294,7 +337,7 @@ function configurarEventosUI() {
     await carregarTudo();
   });
 
-  // Salvar Config Nuvem
+  // Config Nuvem
   document.getElementById('form-supabase-config').addEventListener('submit', async (e) => {
     e.preventDefault();
     DataService.saveConfig(
@@ -305,21 +348,18 @@ function configurarEventosUI() {
     window.location.reload();
   });
 
-  // Limpar Nuvem
   document.getElementById('btn-clear-supabase').addEventListener('click', () => {
     DataService.clearConfig();
     document.getElementById('modal-sync').classList.add('hidden');
     window.location.reload();
   });
 
-  // Exportar CSV Caixa
   document.getElementById('btn-exportar-csv').addEventListener('click', exportarCSV);
 }
 
 async function carregarTudo() {
   const [ordens, caixa] = await Promise.all([DataService.getOS(), DataService.getCaixa()]);
 
-  // Atribui número sequencial fixo para cada OS antes de filtrar
   todasAsOrdens = ordens.map((os, index) => ({
     ...os,
     numero_sequencial: ordens.length - index
@@ -340,19 +380,16 @@ function aplicarFiltrosOS() {
   const dataFim = document.getElementById('filtro-os-data-fim').value;
 
   ordensFiltradasAtual = todasAsOrdens.filter(os => {
-    // 1. Filtro por Texto (Cliente, Aparelho ou Telefone)
     const matchTexto = !termo ||
         (os.cliente && os.cliente.toLowerCase().includes(termo)) ||
         (os.aparelho && os.aparelho.toLowerCase().includes(termo)) ||
         (os.telefone && os.telefone.includes(termo));
 
-    // 2. Filtro por Status
     const matchStatus = !statusFiltro || os.status === statusFiltro;
 
-    // 3. Filtro por Intervalo de Datas (usando created_at)
     let matchData = true;
     if (os.created_at) {
-      const dataOS = os.created_at.split('T')[0]; // Extrai YYYY-MM-DD
+      const dataOS = os.created_at.split('T')[0];
       if (dataInicio && dataOS < dataInicio) matchData = false;
       if (dataFim && dataOS > dataFim) matchData = false;
     }
@@ -365,18 +402,24 @@ function aplicarFiltrosOS() {
 }
 
 function atualizarResumoFiltroOS(lista) {
-  let somaPecas = 0;
-  let somaMO = 0;
+  let somaTotal = 0;
+  let somaPago = 0;
+  let somaFalta = 0;
 
   lista.forEach(os => {
-    somaPecas += parseFloat(os.custo_peca || 0);
-    somaMO += parseFloat(os.mao_obra || 0);
+    const tot = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+    const pg = parseFloat(os.valor_pago || 0);
+    const flt = Math.max(tot - pg, 0);
+
+    somaTotal += tot;
+    somaPago += pg;
+    somaFalta += flt;
   });
 
   document.getElementById('os-filtro-qtd').textContent = lista.length;
-  document.getElementById('os-filtro-pecas').textContent = formatarMoeda(somaPecas);
-  document.getElementById('os-filtro-mo').textContent = formatarMoeda(somaMO);
-  document.getElementById('os-filtro-total').textContent = formatarMoeda(somaPecas + somaMO);
+  document.getElementById('os-filtro-total').textContent = formatarMoeda(somaTotal);
+  document.getElementById('os-filtro-pago').textContent = formatarMoeda(somaPago);
+  document.getElementById('os-filtro-falta').textContent = formatarMoeda(somaFalta);
 }
 
 function exportarRelatorioOSCSV() {
@@ -385,11 +428,14 @@ function exportarRelatorioOSCSV() {
     return;
   }
 
-  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Defeito;Laudo;Pecas;Mao_de_Obra;Total\n';
+  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Forma_Pagto;Total;Valor_Pago;Saldo_Restante\n';
   ordensFiltradasAtual.forEach(os => {
     const dataFmt = formatarDataHoraISO(os.created_at);
     const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
-    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${(os.defeito || '').replace(/"/g, '')}";"${(os.laudo || '').replace(/"/g, '')}";${os.custo_peca};${os.mao_obra};${total}\n`;
+    const pago = parseFloat(os.valor_pago || 0).toFixed(2);
+    const falta = Math.max(total - pago, 0).toFixed(2);
+
+    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${os.forma_pagamento || 'Pendente'}";${total};${pago};${falta}\n`;
   });
 
   const link = document.createElement('a');
@@ -409,15 +455,18 @@ function imprimirRelatorioOS() {
   const tbody = document.getElementById('rep-tabela-body');
   tbody.innerHTML = '';
 
-  let totalPecas = 0;
-  let totalMO = 0;
+  let somaGeral = 0;
+  let somaPago = 0;
+  let somaFalta = 0;
 
   ordensFiltradasAtual.forEach(os => {
-    const p = parseFloat(os.custo_peca || 0);
-    const m = parseFloat(os.mao_obra || 0);
-    const tot = p + m;
-    totalPecas += p;
-    totalMO += m;
+    const tot = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+    const pg = parseFloat(os.valor_pago || 0);
+    const flt = Math.max(tot - pg, 0);
+
+    somaGeral += tot;
+    somaPago += pg;
+    somaFalta += flt;
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -426,9 +475,10 @@ function imprimirRelatorioOS() {
       <td>${os.cliente}</td>
       <td>${os.aparelho}</td>
       <td>${os.status}</td>
-      <td style="text-align: right;">${formatarMoeda(p)}</td>
-      <td style="text-align: right;">${formatarMoeda(m)}</td>
-      <td style="text-align: right;"><strong>${formatarMoeda(tot)}</strong></td>
+      <td>${os.forma_pagamento || 'Pendente'}</td>
+      <td style="text-align: right;">${formatarMoeda(tot)}</td>
+      <td style="text-align: right;">${formatarMoeda(pg)}</td>
+      <td style="text-align: right;"><strong>${formatarMoeda(flt)}</strong></td>
     `;
     tbody.appendChild(tr);
   });
@@ -446,11 +496,10 @@ function imprimirRelatorioOS() {
   document.getElementById('rep-periodo').textContent = textoPeriodo;
   document.getElementById('rep-gerado-em').textContent = new Date().toLocaleString('pt-BR');
   document.getElementById('rep-total-qtd').textContent = ordensFiltradasAtual.length;
-  document.getElementById('rep-total-pecas').textContent = formatarMoeda(totalPecas);
-  document.getElementById('rep-total-mo').textContent = formatarMoeda(totalMO);
-  document.getElementById('rep-total-geral').textContent = formatarMoeda(totalPecas + totalMO);
+  document.getElementById('rep-total-geral').textContent = formatarMoeda(somaGeral);
+  document.getElementById('rep-total-pago').textContent = formatarMoeda(somaPago);
+  document.getElementById('rep-total-falta').textContent = formatarMoeda(somaFalta);
 
-  // Ativa modo de impressão de relatório
   document.body.classList.remove('printing-receipt');
   document.body.classList.add('printing-report');
   window.print();
@@ -510,8 +559,22 @@ function renderizarTabelaOS(ordens) {
   ordens.forEach(os => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-800/40 transition';
-    const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+    const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+    const pago = parseFloat(os.valor_pago || 0);
+    const falta = Math.max(total - pago, 0);
     const dataAbertura = formatarDataHoraISO(os.created_at);
+
+    // Badge financeira dinâmica
+    let badgeFinanceiro = '';
+    if (total === 0) {
+      badgeFinanceiro = `<span class="text-[10px] text-slate-500">Orçamento R$ 0,00</span>`;
+    } else if (falta <= 0) {
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">Quitado (${os.forma_pagamento || 'Pago'})</span>`;
+    } else if (pago > 0) {
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-semibold">Pago ${formatarMoeda(pago)} | Falta ${formatarMoeda(falta)}</span>`;
+    } else {
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-semibold">Pendente</span>`;
+    }
 
     tr.innerHTML = `
       <td class="p-3.5 font-mono text-cyan-400">#${String(os.numero_sequencial).padStart(3, '0')}</td>
@@ -527,9 +590,12 @@ function renderizarTabelaOS(ordens) {
           <option value="Entregue / Concluído" ${os.status === 'Entregue / Concluído' ? 'selected' : ''}>Entregue / Concluído</option>
         </select>
       </td>
-      <td class="p-3.5 font-mono font-semibold">${formatarMoeda(total)}</td>
+      <td class="p-3.5">
+        <div class="font-mono font-semibold text-slate-100 mb-1">${formatarMoeda(total)}</div>
+        <div>${badgeFinanceiro}</div>
+      </td>
       <td class="p-3.5 text-right space-x-1">
-        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS Completa" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Registrar Pagamento" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
         <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
         <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
         <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
@@ -542,6 +608,11 @@ function renderizarTabelaOS(ordens) {
 
 window.editarOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
+  const peca = parseFloat(os.custo_peca || 0);
+  const mo = parseFloat(os.mao_obra || 0);
+  const total = peca + mo;
+  const pago = parseFloat(os.valor_pago || 0);
+  const restante = Math.max(total - pago, 0);
 
   document.getElementById('os-id').value = os.id || '';
   document.getElementById('os-cliente').value = os.cliente || '';
@@ -550,9 +621,13 @@ window.editarOS = function(json) {
   document.getElementById('os-status').value = os.status || 'Em Análise';
   document.getElementById('os-defeito').value = os.defeito || '';
   document.getElementById('os-laudo').value = os.laudo || '';
-  document.getElementById('os-custo-peca').value = parseFloat(os.custo_peca || 0).toFixed(2);
-  document.getElementById('os-mao-obra').value = parseFloat(os.mao_obra || 0).toFixed(2);
-  document.getElementById('os-valor-total').value = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+  document.getElementById('os-custo-peca').value = peca.toFixed(2);
+  document.getElementById('os-mao-obra').value = mo.toFixed(2);
+  document.getElementById('os-valor-total').value = total.toFixed(2);
+
+  document.getElementById('os-forma-pagamento').value = os.forma_pagamento || 'Pendente';
+  document.getElementById('os-valor-pago').value = pago.toFixed(2);
+  document.getElementById('os-saldo-restante').value = restante.toFixed(2);
 
   if (os.assinatura) {
     signaturePadInstance.loadDataURL(os.assinatura);
@@ -630,19 +705,35 @@ window.excluirCaixa = async function(id) {
 window.abrirWhatsAppOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
   const fone = os.telefone.startsWith('55') ? os.telefone : `55${os.telefone}`;
-  const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+  const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+  const pago = parseFloat(os.valor_pago || 0);
+  const falta = Math.max(total - pago, 0);
+
+  let resumoPagto = `*Valor Total:* ${formatarMoeda(total)}`;
+  if (pago > 0 && falta > 0) {
+    resumoPagto += `\n*Sinal Pago (${os.forma_pagamento}):* ${formatarMoeda(pago)}\n*Saldo na Retirada:* ${formatarMoeda(falta)}`;
+  } else if (falta <= 0 && total > 0) {
+    resumoPagto += `\n*Status Pagto:* Quitado (${os.forma_pagamento})`;
+  }
+
   const msg =
       `*CODE & FIX - Assistência Técnica*\n\n` +
       `Olá, *${os.cliente}*!\n` +
       `Status do seu aparelho (*${os.aparelho}*): *${os.status}*\n\n` +
       `*Diagnóstico:* ${os.laudo || 'Em análise'}\n` +
-      `*Valor Total:* R$ ${total}\n\n` +
+      `${resumoPagto}\n\n` +
       `Garantia legal de 90 dias após a retirada. Qualquer dúvida estamos à disposição!`;
   window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msg)}`, '_blank');
 };
 
 window.imprimirOS = function(json, numero) {
   const os = JSON.parse(decodeURIComponent(json));
+  const pecas = parseFloat(os.custo_peca || 0);
+  const mo = parseFloat(os.mao_obra || 0);
+  const total = pecas + mo;
+  const pago = parseFloat(os.valor_pago || 0);
+  const restante = Math.max(total - pago, 0);
+
   document.getElementById('rec-id').textContent = String(numero).padStart(3, '0');
   document.getElementById('rec-data').textContent = formatarDataHoraISO(os.created_at);
   document.getElementById('rec-cliente').textContent = os.cliente;
@@ -650,9 +741,13 @@ window.imprimirOS = function(json, numero) {
   document.getElementById('rec-aparelho').textContent = os.aparelho;
   document.getElementById('rec-defeito').textContent = os.defeito;
   document.getElementById('rec-laudo').textContent = os.laudo || 'Em análise técnica';
-  document.getElementById('rec-pecas').textContent = parseFloat(os.custo_peca || 0).toFixed(2);
-  document.getElementById('rec-mao-obra').textContent = parseFloat(os.mao_obra || 0).toFixed(2);
-  document.getElementById('rec-total').textContent = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+
+  document.getElementById('rec-pecas').textContent = pecas.toFixed(2);
+  document.getElementById('rec-mao-obra').textContent = mo.toFixed(2);
+  document.getElementById('rec-total').textContent = total.toFixed(2);
+  document.getElementById('rec-forma-pagto').textContent = os.forma_pagamento || 'Pendente';
+  document.getElementById('rec-valor-pago').textContent = pago.toFixed(2);
+  document.getElementById('rec-saldo-restante').textContent = restante.toFixed(2);
 
   const sigImg = document.getElementById('rec-signature-img');
   const sigBlank = document.getElementById('rec-signature-blank');
@@ -665,7 +760,6 @@ window.imprimirOS = function(json, numero) {
     sigBlank.style.display = 'block';
   }
 
-  // Ativa modo de impressão de recibo individual
   document.body.classList.remove('printing-report');
   document.body.classList.add('printing-receipt');
   window.print();
