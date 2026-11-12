@@ -1,10 +1,13 @@
 /**
- * App - Controlador Central com Edição, Exclusão e Restauração de Assinatura
+ * App - Controlador Central com Filtros Avançados, Datas e Relatórios
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
 
-// Gestão da Assinatura Digital com Suporte a Carregar Imagem Salva
+// Armazena os dados brutos e os filtrados em memória para relatórios instantâneos
+let todasAsOrdens = [];
+let ordensFiltradasAtual = [];
+
 class SignaturePad {
   constructor(canvasId, clearBtnId) {
     this.canvas = document.getElementById(canvasId);
@@ -174,6 +177,24 @@ function configurarEventosUI() {
     });
   });
 
+  // Ouvintes dos Filtros de OS (Disparam em tempo real ao digitar ou mudar)
+  document.getElementById('filtro-os-texto').addEventListener('input', aplicarFiltrosOS);
+  document.getElementById('filtro-os-status').addEventListener('change', aplicarFiltrosOS);
+  document.getElementById('filtro-os-data-inicio').addEventListener('change', aplicarFiltrosOS);
+  document.getElementById('filtro-os-data-fim').addEventListener('change', aplicarFiltrosOS);
+
+  document.getElementById('btn-limpar-filtros-os').addEventListener('click', () => {
+    document.getElementById('filtro-os-texto').value = '';
+    document.getElementById('filtro-os-status').value = '';
+    document.getElementById('filtro-os-data-inicio').value = '';
+    document.getElementById('filtro-os-data-fim').value = '';
+    aplicarFiltrosOS();
+  });
+
+  // Botões de Relatório de OS
+  document.getElementById('btn-exportar-os-csv').addEventListener('click', exportarRelatorioOSCSV);
+  document.getElementById('btn-imprimir-relatorio-os').addEventListener('click', imprimirRelatorioOS);
+
   // Modal Nova OS
   document.getElementById('btn-nova-os').addEventListener('click', () => {
     document.getElementById('form-os').reset();
@@ -206,7 +227,6 @@ function configurarEventosUI() {
   document.getElementById('btn-sync-settings').addEventListener('click', abrirModalSync);
   document.getElementById('btn-open-sync-login').addEventListener('click', abrirModalSync);
 
-  // Fechar Modais
   document.querySelectorAll('.btn-close-modal').forEach(b => {
     b.addEventListener('click', () => {
       document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.add('hidden'));
@@ -292,17 +312,153 @@ function configurarEventosUI() {
     window.location.reload();
   });
 
-  // Exportar CSV
+  // Exportar CSV Caixa
   document.getElementById('btn-exportar-csv').addEventListener('click', exportarCSV);
 }
 
 async function carregarTudo() {
   const [ordens, caixa] = await Promise.all([DataService.getOS(), DataService.getCaixa()]);
-  renderizarTabelaOS(ordens);
+
+  // Atribui número sequencial fixo para cada OS antes de filtrar
+  todasAsOrdens = ordens.map((os, index) => ({
+    ...os,
+    numero_sequencial: ordens.length - index
+  }));
+
+  aplicarFiltrosOS();
   renderizarTabelaCaixa(caixa);
-  processarPainelMEI(caixa, ordens);
+  processarPainelMEI(caixa, todasAsOrdens);
 }
 
+// ==========================================================================
+// FILTROS E RELATÓRIOS DAS ORDENS DE SERVIÇO
+// ==========================================================================
+function aplicarFiltrosOS() {
+  const termo = document.getElementById('filtro-os-texto').value.toLowerCase().trim();
+  const statusFiltro = document.getElementById('filtro-os-status').value;
+  const dataInicio = document.getElementById('filtro-os-data-inicio').value;
+  const dataFim = document.getElementById('filtro-os-data-fim').value;
+
+  ordensFiltradasAtual = todasAsOrdens.filter(os => {
+    // 1. Filtro por Texto (Cliente, Aparelho ou Telefone)
+    const matchTexto = !termo ||
+        (os.cliente && os.cliente.toLowerCase().includes(termo)) ||
+        (os.aparelho && os.aparelho.toLowerCase().includes(termo)) ||
+        (os.telefone && os.telefone.includes(termo));
+
+    // 2. Filtro por Status
+    const matchStatus = !statusFiltro || os.status === statusFiltro;
+
+    // 3. Filtro por Intervalo de Datas (usando created_at)
+    let matchData = true;
+    if (os.created_at) {
+      const dataOS = os.created_at.split('T')[0]; // Extrai YYYY-MM-DD
+      if (dataInicio && dataOS < dataInicio) matchData = false;
+      if (dataFim && dataOS > dataFim) matchData = false;
+    }
+
+    return matchTexto && matchStatus && matchData;
+  });
+
+  renderizarTabelaOS(ordensFiltradasAtual);
+  atualizarResumoFiltroOS(ordensFiltradasAtual);
+}
+
+function atualizarResumoFiltroOS(lista) {
+  let somaPecas = 0;
+  let somaMO = 0;
+
+  lista.forEach(os => {
+    somaPecas += parseFloat(os.custo_peca || 0);
+    somaMO += parseFloat(os.mao_obra || 0);
+  });
+
+  document.getElementById('os-filtro-qtd').textContent = lista.length;
+  document.getElementById('os-filtro-pecas').textContent = formatarMoeda(somaPecas);
+  document.getElementById('os-filtro-mo').textContent = formatarMoeda(somaMO);
+  document.getElementById('os-filtro-total').textContent = formatarMoeda(somaPecas + somaMO);
+}
+
+function exportarRelatorioOSCSV() {
+  if (ordensFiltradasAtual.length === 0) {
+    alert('Nenhuma Ordem de Serviço filtrada para gerar relatório.');
+    return;
+  }
+
+  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Defeito;Laudo;Pecas;Mao_de_Obra;Total\n';
+  ordensFiltradasAtual.forEach(os => {
+    const dataFmt = formatarDataHoraISO(os.created_at);
+    const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${(os.defeito || '').replace(/"/g, '')}";"${(os.laudo || '').replace(/"/g, '')}";${os.custo_peca};${os.mao_obra};${total}\n`;
+  });
+
+  const link = document.createElement('a');
+  link.setAttribute('href', encodeURI(csv));
+  link.setAttribute('download', `relatorio_os_code_and_fix_${new Date().toISOString().split('T')[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function imprimirRelatorioOS() {
+  if (ordensFiltradasAtual.length === 0) {
+    alert('Nenhuma Ordem de Serviço na lista para imprimir relatório.');
+    return;
+  }
+
+  const tbody = document.getElementById('rep-tabela-body');
+  tbody.innerHTML = '';
+
+  let totalPecas = 0;
+  let totalMO = 0;
+
+  ordensFiltradasAtual.forEach(os => {
+    const p = parseFloat(os.custo_peca || 0);
+    const m = parseFloat(os.mao_obra || 0);
+    const tot = p + m;
+    totalPecas += p;
+    totalMO += m;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>#${String(os.numero_sequencial).padStart(3, '0')}</td>
+      <td>${formatarDataHoraISO(os.created_at)}</td>
+      <td>${os.cliente}</td>
+      <td>${os.aparelho}</td>
+      <td>${os.status}</td>
+      <td style="text-align: right;">${formatarMoeda(p)}</td>
+      <td style="text-align: right;">${formatarMoeda(m)}</td>
+      <td style="text-align: right;"><strong>${formatarMoeda(tot)}</strong></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  const dIni = document.getElementById('filtro-os-data-inicio').value;
+  const dFim = document.getElementById('filtro-os-data-fim').value;
+  const st = document.getElementById('filtro-os-status').value;
+
+  let textoPeriodo = 'Período: Todos os registros';
+  if (dIni || dFim) {
+    textoPeriodo = `Período: ${dIni ? formatarData(dIni) : 'Início'} até ${dFim ? formatarData(dFim) : 'Hoje'}`;
+  }
+  if (st) textoPeriodo += ` | Status: ${st}`;
+
+  document.getElementById('rep-periodo').textContent = textoPeriodo;
+  document.getElementById('rep-gerado-em').textContent = new Date().toLocaleString('pt-BR');
+  document.getElementById('rep-total-qtd').textContent = ordensFiltradasAtual.length;
+  document.getElementById('rep-total-pecas').textContent = formatarMoeda(totalPecas);
+  document.getElementById('rep-total-mo').textContent = formatarMoeda(totalMO);
+  document.getElementById('rep-total-geral').textContent = formatarMoeda(totalPecas + totalMO);
+
+  // Ativa modo de impressão de relatório
+  document.body.classList.remove('printing-receipt');
+  document.body.classList.add('printing-report');
+  window.print();
+}
+
+// ==========================================================================
+// DASHBOARD & TABELAS
+// ==========================================================================
 function processarPainelMEI(caixa, ordens) {
   const mesAtual = new Date().getMonth();
   const anoAtual = new Date().getFullYear();
@@ -347,16 +503,19 @@ function renderizarTabelaOS(ordens) {
   const tbody = document.getElementById('tabela-os-body');
   tbody.innerHTML = '';
   if (ordens.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhuma OS em bancada.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhuma OS encontrada com os filtros aplicados.</td></tr>`;
     return;
   }
 
-  ordens.forEach((os, idx) => {
+  ordens.forEach(os => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-800/40 transition';
     const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+    const dataAbertura = formatarDataHoraISO(os.created_at);
+
     tr.innerHTML = `
-      <td class="p-3.5 font-mono text-cyan-400">#${String(ordens.length - idx).padStart(3, '0')}</td>
+      <td class="p-3.5 font-mono text-cyan-400">#${String(os.numero_sequencial).padStart(3, '0')}</td>
+      <td class="p-3.5 font-mono text-slate-400 text-[11px]">${dataAbertura}</td>
       <td class="p-3.5 font-medium text-slate-200">${os.cliente}</td>
       <td class="p-3.5">${os.aparelho}</td>
       <td class="p-3.5">
@@ -372,7 +531,7 @@ function renderizarTabelaOS(ordens) {
       <td class="p-3.5 text-right space-x-1">
         <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS Completa" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
         <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
-        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${ordens.length - idx})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
+        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
         <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
       </td>
     `;
@@ -395,7 +554,6 @@ window.editarOS = function(json) {
   document.getElementById('os-mao-obra').value = parseFloat(os.mao_obra || 0).toFixed(2);
   document.getElementById('os-valor-total').value = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
 
-  // Restaura a assinatura existente no Canvas caso ela exista
   if (os.assinatura) {
     signaturePadInstance.loadDataURL(os.assinatura);
   } else {
@@ -422,7 +580,7 @@ function renderizarTabelaCaixa(caixa) {
   const tbody = document.getElementById('tabela-caixa-body');
   tbody.innerHTML = '';
   if (caixa.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-500">Nenhum lançamento no caixa.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum lançamento no caixa.</td></tr>`;
     return;
   }
 
@@ -486,6 +644,7 @@ window.abrirWhatsAppOS = function(json) {
 window.imprimirOS = function(json, numero) {
   const os = JSON.parse(decodeURIComponent(json));
   document.getElementById('rec-id').textContent = String(numero).padStart(3, '0');
+  document.getElementById('rec-data').textContent = formatarDataHoraISO(os.created_at);
   document.getElementById('rec-cliente').textContent = os.cliente;
   document.getElementById('rec-telefone').textContent = os.telefone;
   document.getElementById('rec-aparelho').textContent = os.aparelho;
@@ -506,6 +665,9 @@ window.imprimirOS = function(json, numero) {
     sigBlank.style.display = 'block';
   }
 
+  // Ativa modo de impressão de recibo individual
+  document.body.classList.remove('printing-report');
+  document.body.classList.add('printing-receipt');
   window.print();
 };
 
@@ -560,6 +722,13 @@ function formatarData(d) {
   if (!d) return '--/--/----';
   const [ano, mes, dia] = d.split('-');
   return `${dia}/${mes}/${ano}`;
+}
+
+function formatarDataHoraISO(isoStr) {
+  if (!isoStr) return '--/--/----';
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return '--/--/----';
+  return d.toLocaleDateString('pt-BR');
 }
 
 function obterCorTextoStatus(status) {

@@ -18,7 +18,7 @@
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
 
-<!-- TELA DE LOGIN (Exibida quando não há sessão ativa) -->
+<!-- TELA DE LOGIN -->
 <div id="auth-screen" class="fixed inset-0 bg-slate-950 flex items-center justify-center p-4 z-50">
   <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-sm w-full space-y-6 shadow-2xl">
     <div class="text-center space-y-2">
@@ -150,17 +150,80 @@
 
     <!-- ORDENS DE SERVIÇO -->
     <section id="view-os" class="hidden space-y-4">
-      <div class="flex justify-between items-center">
-        <h2 class="text-lg font-semibold text-slate-100">Ordens de Serviço</h2>
-        <button id="btn-nova-os" class="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition">
-          <i data-lucide="plus" class="w-4 h-4"></i><span>Nova OS</span>
-        </button>
+      <div class="flex flex-wrap justify-between items-center gap-3">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-100">Ordens de Serviço</h2>
+          <p class="text-xs text-slate-400">Filtre por cliente, aparelho, data ou gere relatórios da bancada</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="btn-exportar-os-csv" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1.5 transition">
+            <i data-lucide="file-spreadsheet" class="w-4 h-4"></i><span>Relatório CSV</span>
+          </button>
+          <button id="btn-imprimir-relatorio-os" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1.5 transition">
+            <i data-lucide="printer" class="w-4 h-4"></i><span>Imprimir Relatório</span>
+          </button>
+          <button id="btn-nova-os" class="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition">
+            <i data-lucide="plus" class="w-4 h-4"></i><span>Nova OS</span>
+          </button>
+        </div>
       </div>
+
+      <!-- BARRA DE FILTROS E BUSCA -->
+      <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs items-end">
+        <div class="lg:col-span-4">
+          <label class="block text-slate-400 mb-1">Buscar Cliente ou Aparelho</label>
+          <div class="relative">
+            <input type="text" id="filtro-os-texto" placeholder="Nome, telefone ou modelo..." class="form-input pl-8">
+            <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5"></i>
+          </div>
+        </div>
+
+        <div class="lg:col-span-3">
+          <label class="block text-slate-400 mb-1">Filtrar por Status</label>
+          <select id="filtro-os-status" class="form-input">
+            <option value="">Todos os Status</option>
+            <option value="Em Análise">Em Análise</option>
+            <option value="Aguardando Aprovação">Aguardando Aprovação</option>
+            <option value="Aguardando Peça">Aguardando Peça</option>
+            <option value="Pronto para Retirada">Pronto para Retirada</option>
+            <option value="Entregue / Concluído">Entregue / Concluído</option>
+          </select>
+        </div>
+
+        <div class="lg:col-span-2">
+          <label class="block text-slate-400 mb-1">Data Inicial</label>
+          <input type="date" id="filtro-os-data-inicio" class="form-input">
+        </div>
+
+        <div class="lg:col-span-2">
+          <label class="block text-slate-400 mb-1">Data Final</label>
+          <input type="date" id="filtro-os-data-fim" class="form-input">
+        </div>
+
+        <div class="lg:col-span-1">
+          <button id="btn-limpar-filtros-os" title="Limpar Filtros" class="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg flex items-center justify-center transition">
+            <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- RESUMO DOS RESULTADOS FILTRADOS -->
+      <div class="flex flex-wrap justify-between items-center bg-slate-800/40 border border-slate-700/60 px-4 py-2.5 rounded-xl text-xs">
+        <span class="text-slate-400">Exibindo <strong id="os-filtro-qtd" class="text-slate-200">0</strong> ordem(ns) de serviço</span>
+        <div class="flex space-x-4 font-mono">
+          <span class="text-slate-400">Peças: <strong id="os-filtro-pecas" class="text-rose-400">R$ 0,00</strong></span>
+          <span class="text-slate-400">Mão de Obra: <strong id="os-filtro-mo" class="text-emerald-400">R$ 0,00</strong></span>
+          <span class="text-slate-400">Total Geral: <strong id="os-filtro-total" class="text-cyan-400">R$ 0,00</strong></span>
+        </div>
+      </div>
+
+      <!-- TABELA DE OS -->
       <div class="bg-slate-800/60 border border-slate-700 rounded-xl overflow-x-auto">
         <table class="w-full text-left text-xs">
           <thead class="bg-slate-800 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700">
           <tr>
             <th class="p-3.5">OS #</th>
+            <th class="p-3.5">Data</th>
             <th class="p-3.5">Cliente</th>
             <th class="p-3.5">Aparelho</th>
             <th class="p-3.5">Status</th>
@@ -271,7 +334,7 @@
         </div>
       </div>
 
-      <!-- Módulo de Assinatura Digital -->
+      <!-- Assinatura Digital -->
       <div class="space-y-1 pt-2 border-t border-slate-700/60">
         <div class="flex justify-between items-center">
           <label class="text-slate-400">Assinatura do Cliente (Retirada)</label>
@@ -367,13 +430,13 @@
   </div>
 </div>
 
-<!-- RECIBO PARA IMPRESSÃO -->
+<!-- RECIBO INDIVIDUAL PARA IMPRESSÃO -->
 <div id="receipt-print-area" class="hidden">
   <div class="receipt-container">
     <div class="receipt-header">
       <h2>CODE & FIX - ASSISTÊNCIA TÉCNICA</h2>
       <p>Smartphones, Informática e Microeletrônica</p>
-      <p class="receipt-id">ORDEM DE SERVIÇO Nº <span id="rec-id">000</span></p>
+      <p class="receipt-id">ORDEM DE SERVIÇO Nº <span id="rec-id">000</span> — Data: <span id="rec-data">--/--/----</span></p>
     </div>
     <hr>
     <div class="receipt-section">
@@ -401,6 +464,38 @@
         <div id="rec-signature-blank" style="height: 45px;"></div>
         <span>Assinatura do Cliente</span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- RELATÓRIO GERAL DE OS PARA IMPRESSÃO -->
+<div id="report-print-area" class="hidden">
+  <div class="report-container">
+    <div class="report-header">
+      <h2>CODE & FIX - RELATÓRIO DE ORDENS DE SERVIÇO</h2>
+      <p id="rep-periodo">Período: Todos os registros</p>
+      <p style="font-size: 10px; margin-top: 4px;">Gerado em: <span id="rep-gerado-em"></span></p>
+    </div>
+    <table class="report-table">
+      <thead>
+      <tr>
+        <th>OS</th>
+        <th>Data</th>
+        <th>Cliente</th>
+        <th>Aparelho</th>
+        <th>Status</th>
+        <th style="text-align: right;">Peças</th>
+        <th style="text-align: right;">M. Obra</th>
+        <th style="text-align: right;">Total</th>
+      </tr>
+      </thead>
+      <tbody id="rep-tabela-body"></tbody>
+    </table>
+    <div class="report-totals">
+      <p>Total de Ordens: <strong id="rep-total-qtd">0</strong></p>
+      <p>Custo Peças: <strong id="rep-total-pecas">R$ 0,00</strong></p>
+      <p>Mão de Obra: <strong id="rep-total-mo">R$ 0,00</strong></p>
+      <p>Faturamento Bruto: <strong id="rep-total-geral">R$ 0,00</strong></p>
     </div>
   </div>
 </div>

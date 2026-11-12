@@ -16,6 +16,12 @@
   box-shadow: 0 0 0 1px rgb(6, 182, 212);
 }
 
+/* Ajuste no ícone do input type="date" no modo escuro */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  cursor: pointer;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -33,7 +39,9 @@
   color: #ffffff !important;
 }
 
-/* Regras de Impressão */
+/* ==========================================================================
+   Regras de Impressão (Suporta Recibo Individual OU Relatório Geral)
+   ========================================================================== */
 @media print {
   header, main, .modal-backdrop, #auth-screen, nav {
     display: none !important;
@@ -42,24 +50,32 @@
   body {
     background: #ffffff !important;
     color: #000000 !important;
-    font-family: monospace, Arial, sans-serif !important;
+    font-family: Arial, Helvetica, sans-serif !important;
     padding: 0 !important;
+    margin: 0 !important;
   }
 
-  #receipt-print-area {
+  /* Quando imprimir recibo individual */
+  body.printing-receipt #receipt-print-area {
     display: block !important;
-    position: absolute;
-    left: 0;
-    top: 0;
     width: 100%;
     padding: 20px;
   }
 
+  /* Quando imprimir relatório gerencial */
+  body.printing-report #report-print-area {
+    display: block !important;
+    width: 100%;
+    padding: 20px;
+  }
+
+  /* Estilos do Recibo Individual */
   .receipt-container {
     max-width: 700px;
     margin: 0 auto;
     border: 1px dashed #000;
     padding: 20px;
+    font-family: monospace;
   }
 
   .receipt-header {
@@ -68,7 +84,7 @@
   }
 
   .receipt-id {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
     margin-top: 5px;
   }
@@ -103,5 +119,54 @@
     text-align: center;
     font-size: 11px;
     padding-top: 4px;
+  }
+
+  /* Estilos do Relatório Geral */
+  .report-container {
+    width: 100%;
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  .report-header {
+    border-bottom: 2px solid #000;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+  }
+
+  .report-header h2 {
+    font-size: 16px;
+    margin: 0;
+  }
+
+  .report-header p {
+    font-size: 12px;
+    margin: 2px 0 0 0;
+  }
+
+  .report-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  .report-table th, .report-table td {
+    border: 1px solid #ccc;
+    padding: 6px 8px;
+    text-align: left;
+  }
+
+  .report-table th {
+    background-color: #f0f0f0;
+    font-weight: bold;
+  }
+
+  .report-totals {
+    margin-top: 15px;
+    padding-top: 10px;
+    border-top: 2px solid #000;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
   }
 }
