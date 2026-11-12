@@ -153,7 +153,7 @@
       <div class="flex flex-wrap justify-between items-center gap-3">
         <div>
           <h2 class="text-lg font-semibold text-slate-100">Ordens de Serviço</h2>
-          <p class="text-xs text-slate-400">Controle de bancada, pagamentos parciais/sinais e relatórios</p>
+          <p class="text-xs text-slate-400">Controle de bancada, checklist de entrada, pagamentos e relatórios</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <button id="btn-exportar-os-csv" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1.5 transition">
@@ -271,9 +271,9 @@
   </main>
 </div>
 
-<!-- MODAL: NOVA / EDITAR OS COM CONTROLE DE PAGAMENTO E ASSINATURA -->
+<!-- MODAL: NOVA / EDITAR OS COM CHECKLIST, PAGAMENTO E ASSINATURA -->
 <div id="modal-os" class="modal-backdrop hidden">
-  <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+  <div class="bg-slate-800 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto">
     <div class="flex justify-between items-center border-b border-slate-700 pb-3">
       <h3 id="modal-os-title" class="text-sm font-semibold text-slate-100">Nova Ordem de Serviço</h3>
       <button class="btn-close-modal text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
@@ -281,7 +281,7 @@
 
     <form id="form-os" class="space-y-3.5 text-xs">
       <input type="hidden" id="os-id">
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label class="block text-slate-400 mb-1">Cliente</label>
           <input type="text" id="os-cliente" required class="form-input">
@@ -292,7 +292,7 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label class="block text-slate-400 mb-1">Aparelho</label>
           <input type="text" id="os-aparelho" placeholder="Ex: Moto G84 / Notebook Dell" required class="form-input">
@@ -309,14 +309,96 @@
         </div>
       </div>
 
-      <div>
-        <label class="block text-slate-400 mb-1">Defeito Relatado</label>
-        <textarea id="os-defeito" rows="2" required class="form-input"></textarea>
+      <!-- CHECKLIST DE ENTRADA DO APARELHO -->
+      <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700/80 space-y-2.5">
+        <div class="flex flex-wrap justify-between items-center gap-2 border-b border-slate-700/60 pb-2">
+            <span class="text-[11px] font-semibold text-cyan-400 flex items-center gap-1.5">
+              <i data-lucide="clipboard-check" class="w-3.5 h-3.5"></i>
+              Checklist de Entrada (Condições na Recepção)
+            </span>
+          <label class="flex items-center space-x-1.5 text-[11px] text-amber-400 cursor-pointer">
+            <input type="checkbox" id="chk-aparelho-desligado" class="rounded bg-slate-800 border-slate-600 text-amber-500 focus:ring-0">
+            <span>Aparelho entrou desligado / sem imagem (Não testado)</span>
+          </label>
+        </div>
+
+        <div id="checklist-items-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+          <div>
+            <label class="block text-slate-400 mb-0.5">Tela / Touch</label>
+            <select id="chk-tela" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Funcionando</option>
+              <option value="Trincada / Riscada">Trincada / Riscada</option>
+              <option value="Sem Imagem / Falha">Sem Imagem / Falha</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Câmeras (F/T)</label>
+            <select id="chk-cameras" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Funcionando</option>
+              <option value="Com Defeito">Com Defeito / Embaçada</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Botões Físicos</label>
+            <select id="chk-botoes" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Funcionando</option>
+              <option value="Com Defeito">Afundado / Falhando</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Wi-Fi / Rede</label>
+            <select id="chk-wifi" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Conectando</option>
+              <option value="Sem Sinal">Sem Sinal / Falha</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Conector Carga</label>
+            <select id="chk-carga" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Carregando</option>
+              <option value="Com Folga / Não Carrega">Folga / Não Carrega</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Áudio / Mic</label>
+            <select id="chk-audio" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Funcionando</option>
+              <option value="Sem Som / Chiado">Sem Som / Chiado</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Biometria / FaceID</label>
+            <select id="chk-biometria" class="form-input py-1 text-[11px]">
+              <option value="OK">OK / Funcionando</option>
+              <option value="Indisponível">Indisponível / Falha</option>
+              <option value="Não Testado">Não Testado</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-0.5">Carcaça / Tampa</label>
+            <select id="chk-carcaca" class="form-input py-1 text-[11px]">
+              <option value="Intacta">Intacta / Marcas uso</option>
+              <option value="Quebrada / Empenada">Quebrada / Empenada</option>
+            </select>
+          </div>
+        </div>
       </div>
 
-      <div>
-        <label class="block text-slate-400 mb-1">Diagnóstico Técnico / Solução</label>
-        <textarea id="os-laudo" rows="2" placeholder="Ex: Troca de conector e restauração de trilha" class="form-input"></textarea>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-slate-400 mb-1">Defeito Relatado</label>
+          <textarea id="os-defeito" rows="2" required class="form-input"></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Diagnóstico Técnico / Solução</label>
+          <textarea id="os-laudo" rows="2" placeholder="Ex: Troca de conector e restauração de trilha" class="form-input"></textarea>
+        </div>
       </div>
 
       <!-- VALORES DO SERVIÇO -->
@@ -372,11 +454,11 @@
       <!-- Assinatura Digital -->
       <div class="space-y-1 pt-1">
         <div class="flex justify-between items-center">
-          <label class="text-slate-400">Assinatura do Cliente (Retirada)</label>
+          <label class="text-slate-400">Assinatura do Cliente (Concordância Checklist / Retirada)</label>
           <button type="button" id="btn-clear-sig" class="text-[10px] text-rose-400 hover:underline">Limpar Traço</button>
         </div>
         <div class="border border-slate-700 rounded-lg bg-slate-950 overflow-hidden">
-          <canvas id="signature-pad" width="450" height="120" class="w-full touch-none cursor-crosshair"></canvas>
+          <canvas id="signature-pad" width="550" height="110" class="w-full touch-none cursor-crosshair"></canvas>
         </div>
       </div>
 
@@ -475,11 +557,14 @@
     </div>
     <hr>
     <div class="receipt-section">
-      <p><strong>Cliente:</strong> <span id="rec-cliente"></span></p>
-      <p><strong>Telefone:</strong> <span id="rec-telefone"></span></p>
+      <p><strong>Cliente:</strong> <span id="rec-cliente"></span> | <strong>Tel:</strong> <span id="rec-telefone"></span></p>
       <p><strong>Aparelho:</strong> <span id="rec-aparelho"></span></p>
       <p><strong>Defeito Declarado:</strong> <span id="rec-defeito"></span></p>
       <p><strong>Solução Técnica:</strong> <span id="rec-laudo"></span></p>
+    </div>
+    <hr>
+    <div class="receipt-section" style="font-size: 11px;">
+      <p><strong>CHECKLIST DE ENTRADA:</strong> <span id="rec-checklist"></span></p>
     </div>
     <hr>
     <div class="receipt-section">
@@ -491,7 +576,7 @@
     <hr>
     <div class="receipt-warranty">
       <h4>TERMO DE GARANTIA LEGAL (90 DIAS)</h4>
-      <p>Conforme o Art. 26 da Lei nº 8.078/1990 (CDC), este estabelecimento assegura garantia de 90 dias sobre as peças e serviços discriminados. Danos por contato com líquidos, quedas ou intervenção de terceiros invalidam este termo.</p>
+      <p>Conforme o Art. 26 da Lei nº 8.078/1990 (CDC), este estabelecimento assegura garantia de 90 dias sobre as peças e serviços discriminados. Aparelhos entregues desligados não permitem testes prévios de periféricos na recepção. Danos por contato com líquidos, quedas ou intervenção de terceiros invalidam este termo.</p>
     </div>
     <div class="receipt-signatures">
       <div class="signature-line">Code & Fix - Técnico</div>

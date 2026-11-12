@@ -1,5 +1,5 @@
 /**
- * App - Controlador Central com Controle de Pagamentos, Sinais e Relatórios
+ * App - Controlador Central com Checklist de Entrada, Pagamentos e Relatórios
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
@@ -194,6 +194,16 @@ function configurarEventosUI() {
   document.getElementById('btn-exportar-os-csv').addEventListener('click', exportarRelatorioOSCSV);
   document.getElementById('btn-imprimir-relatorio-os').addEventListener('click', imprimirRelatorioOS);
 
+  // Atalho no Checklist: Se marcar "Aparelho entrou desligado", muda todos os periféricos para "Não Testado"
+  document.getElementById('chk-aparelho-desligado').addEventListener('change', (e) => {
+    const isDesligado = e.target.checked;
+    const itens = ['chk-tela', 'chk-cameras', 'chk-botoes', 'chk-wifi', 'chk-carga', 'chk-audio', 'chk-biometria'];
+    itens.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = isDesligado ? 'Não Testado' : 'OK';
+    });
+  });
+
   // Modal Nova OS
   document.getElementById('btn-nova-os').addEventListener('click', () => {
     document.getElementById('form-os').reset();
@@ -205,6 +215,7 @@ function configurarEventosUI() {
     document.getElementById('os-forma-pagamento').value = 'Pendente';
     document.getElementById('os-valor-pago').value = '0.00';
     document.getElementById('os-saldo-restante').value = '0.00';
+    resetarChecklistPadrao();
     document.getElementById('modal-os-title').textContent = 'Nova Ordem de Serviço';
     document.getElementById('modal-os').classList.remove('hidden');
   });
@@ -303,6 +314,7 @@ function configurarEventosUI() {
       valor_pago: pago,
       forma_pagamento: document.getElementById('os-forma-pagamento').value,
       saldo_restante: restante,
+      checklist: capturarChecklist(),
       assinatura: assinaturaData
     };
 
@@ -355,6 +367,57 @@ function configurarEventosUI() {
   });
 
   document.getElementById('btn-exportar-csv').addEventListener('click', exportarCSV);
+}
+
+// ==========================================================================
+// FUNÇÕES DO CHECKLIST DE ENTRADA
+// ==========================================================================
+function resetarChecklistPadrao() {
+  document.getElementById('chk-aparelho-desligado').checked = false;
+  document.getElementById('chk-tela').value = 'OK';
+  document.getElementById('chk-cameras').value = 'OK';
+  document.getElementById('chk-botoes').value = 'OK';
+  document.getElementById('chk-wifi').value = 'OK';
+  document.getElementById('chk-carga').value = 'OK';
+  document.getElementById('chk-audio').value = 'OK';
+  document.getElementById('chk-biometria').value = 'OK';
+  document.getElementById('chk-carcaca').value = 'Intacta';
+}
+
+function capturarChecklist() {
+  return {
+    desligado: document.getElementById('chk-aparelho-desligado').checked,
+    tela: document.getElementById('chk-tela').value,
+    cameras: document.getElementById('chk-cameras').value,
+    botoes: document.getElementById('chk-botoes').value,
+    wifi: document.getElementById('chk-wifi').value,
+    carga: document.getElementById('chk-carga').value,
+    audio: document.getElementById('chk-audio').value,
+    biometria: document.getElementById('chk-biometria').value,
+    carcaca: document.getElementById('chk-carcaca').value
+  };
+}
+
+function preencherChecklistNoModal(chk) {
+  resetarChecklistPadrao();
+  if (!chk) return;
+  document.getElementById('chk-aparelho-desligado').checked = !!chk.desligado;
+  if (chk.tela) document.getElementById('chk-tela').value = chk.tela;
+  if (chk.cameras) document.getElementById('chk-cameras').value = chk.cameras;
+  if (chk.botoes) document.getElementById('chk-botoes').value = chk.botoes;
+  if (chk.wifi) document.getElementById('chk-wifi').value = chk.wifi;
+  if (chk.carga) document.getElementById('chk-carga').value = chk.carga;
+  if (chk.audio) document.getElementById('chk-audio').value = chk.audio;
+  if (chk.biometria) document.getElementById('chk-biometria').value = chk.biometria;
+  if (chk.carcaca) document.getElementById('chk-carcaca').value = chk.carcaca;
+}
+
+function formatarChecklistTexto(chk) {
+  if (!chk || Object.keys(chk).length === 0) return 'Não preenchido';
+  if (chk.desligado) {
+    return `Aparelho entrou desligado/sem imagem (periféricos não testados). Carcaça: ${chk.carcaca || 'Intacta'}.`;
+  }
+  return `Tela: ${chk.tela} | Câmeras: ${chk.cameras} | Botões: ${chk.botoes} | Wi-Fi: ${chk.wifi} | Carga: ${chk.carga} | Áudio: ${chk.audio} | Biometria: ${chk.biometria} | Carcaça: ${chk.carcaca}`;
 }
 
 async function carregarTudo() {
@@ -428,14 +491,15 @@ function exportarRelatorioOSCSV() {
     return;
   }
 
-  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Forma_Pagto;Total;Valor_Pago;Saldo_Restante\n';
+  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Checklist;Forma_Pagto;Total;Valor_Pago;Saldo_Restante\n';
   ordensFiltradasAtual.forEach(os => {
     const dataFmt = formatarDataHoraISO(os.created_at);
     const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
     const pago = parseFloat(os.valor_pago || 0).toFixed(2);
     const falta = Math.max(total - pago, 0).toFixed(2);
+    const chkTexto = formatarChecklistTexto(os.checklist);
 
-    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${os.forma_pagamento || 'Pendente'}";${total};${pago};${falta}\n`;
+    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${chkTexto}";"${os.forma_pagamento || 'Pendente'}";${total};${pago};${falta}\n`;
   });
 
   const link = document.createElement('a');
@@ -564,7 +628,6 @@ function renderizarTabelaOS(ordens) {
     const falta = Math.max(total - pago, 0);
     const dataAbertura = formatarDataHoraISO(os.created_at);
 
-    // Badge financeira dinâmica
     let badgeFinanceiro = '';
     if (total === 0) {
       badgeFinanceiro = `<span class="text-[10px] text-slate-500">Orçamento R$ 0,00</span>`;
@@ -595,7 +658,7 @@ function renderizarTabelaOS(ordens) {
         <div>${badgeFinanceiro}</div>
       </td>
       <td class="p-3.5 text-right space-x-1">
-        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Registrar Pagamento" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Checklist / Pagamento" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
         <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
         <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
         <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
@@ -628,6 +691,8 @@ window.editarOS = function(json) {
   document.getElementById('os-forma-pagamento').value = os.forma_pagamento || 'Pendente';
   document.getElementById('os-valor-pago').value = pago.toFixed(2);
   document.getElementById('os-saldo-restante').value = restante.toFixed(2);
+
+  preencherChecklistNoModal(os.checklist);
 
   if (os.assinatura) {
     signaturePadInstance.loadDataURL(os.assinatura);
@@ -741,6 +806,7 @@ window.imprimirOS = function(json, numero) {
   document.getElementById('rec-aparelho').textContent = os.aparelho;
   document.getElementById('rec-defeito').textContent = os.defeito;
   document.getElementById('rec-laudo').textContent = os.laudo || 'Em análise técnica';
+  document.getElementById('rec-checklist').textContent = formatarChecklistTexto(os.checklist);
 
   document.getElementById('rec-pecas').textContent = pecas.toFixed(2);
   document.getElementById('rec-mao-obra').textContent = mo.toFixed(2);
