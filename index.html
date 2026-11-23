@@ -502,7 +502,7 @@
   </div>
 </div>
 
-<!-- MODAL: COBRANÇA PIX (QR CODE + COPIA E COLA) -->
+<!-- MODAL: COBRANÇA PIX (QR CODE + ENVIO EM 2 BOTÕES NO WHATSAPP) -->
 <div id="modal-pix" class="modal-backdrop hidden">
   <div class="bg-slate-800 border border-slate-700 w-full max-w-sm rounded-2xl p-6 space-y-4 text-xs">
     <div class="flex justify-between items-center border-b border-slate-700 pb-3">
@@ -539,10 +539,17 @@
         </div>
       </div>
 
-      <button type="button" id="btn-enviar-pix-whatsapp" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition">
-        <i data-lucide="message-circle" class="w-4 h-4"></i>
-        <span>Enviar Código Pix Isolado no WhatsApp</span>
-      </button>
+      <div class="space-y-2 pt-1">
+        <button type="button" id="btn-enviar-pix-resumo" class="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded-lg font-semibold flex items-center justify-center gap-2 transition">
+          <i data-lucide="file-text" class="w-4 h-4 text-cyan-400"></i>
+          <span>1. Enviar Mensagem Explicativa (WhatsApp)</span>
+        </button>
+
+        <button type="button" id="btn-enviar-pix-whatsapp" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition">
+          <i data-lucide="message-circle" class="w-4 h-4"></i>
+          <span>2. Enviar Código Pix Isolado (WhatsApp)</span>
+        </button>
+      </div>
     </div>
   </div>
 </div>

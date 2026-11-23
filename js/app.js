@@ -1,6 +1,6 @@
 /**
  * App - Controlador Central com Gerador Oficial de QR Code Pix (BR Code / CRC16),
- * Envio em Duas Mensagens no WhatsApp, Múltiplos Pagamentos e Checklist
+ * Envio Direto sem Bloqueio de Pop-up, Múltiplos Pagamentos e Checklist
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
@@ -200,7 +200,6 @@ class SignaturePad {
 document.addEventListener('DOMContentLoaded', async () => {
   if (window.lucide) lucide.createIcons();
 
-  // Registra os eventos da UI primeiro para nunca bloquear os botões de login/offline
   configurarEventosUI();
 
   try {
@@ -374,11 +373,8 @@ function configurarEventosUI() {
     setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
   });
 
-  // Envia em 2 mensagens separadas no WhatsApp: 1ª texto explicativo, 2ª código Pix puro
-  document.getElementById('btn-enviar-pix-whatsapp').addEventListener('click', () => {
-    const codigoPix = document.getElementById('pix-copia-cola-texto').value;
-    if (!codigoPix) return;
-
+  // Botão 1 do Modal Pix: Envia apenas a mensagem explicativa (clique síncrono)
+  document.getElementById('btn-enviar-pix-resumo').addEventListener('click', () => {
     const valorCobrado = parseFloat(document.getElementById('pix-modal-valor').value) || 0;
     const foneLimpo = contextoPixAtual.telefone.replace(/\D/g, '');
     const fone = foneLimpo.startsWith('55') ? foneLimpo : `55${foneLimpo}`;
@@ -388,13 +384,20 @@ function configurarEventosUI() {
         `Olá, *${contextoPixAtual.cliente}*!\n` +
         `Segue o código *Pix Copia e Cola* referente ao serviço (*${contextoPixAtual.aparelho}* - ${contextoPixAtual.numeroOS}):\n\n` +
         `*Valor:* ${formatarMoeda(valorCobrado)}\n\n` +
-        `Copie o código abaixo e cole na área *Pix Copia e Cola* do aplicativo do seu banco:`;
+        `Copie o código da mensagem seguinte e cole na área *Pix Copia e Cola* do aplicativo do seu banco:`;
 
     window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msgIntro)}`, '_blank');
+  });
 
-    setTimeout(() => {
-      window.open(`https://wa.me/${fone}?text=${encodeURIComponent(codigoPix)}`, '_blank');
-    }, 800);
+  // Botão 2 do Modal Pix: Envia apenas o código Pix isolado (clique síncrono, sem bloqueio)
+  document.getElementById('btn-enviar-pix-whatsapp').addEventListener('click', () => {
+    const codigoPix = document.getElementById('pix-copia-cola-texto').value;
+    if (!codigoPix) return;
+
+    const foneLimpo = contextoPixAtual.telefone.replace(/\D/g, '');
+    const fone = foneLimpo.startsWith('55') ? foneLimpo : `55${foneLimpo}`;
+
+    window.open(`https://wa.me/${fone}?text=${encodeURIComponent(codigoPix)}`, '_blank');
   });
 
   // Adicionar ou Salvar Edição de uma Parcela de Pagamento dentro da OS
@@ -1064,7 +1067,7 @@ function renderizarTabelaOS(ordens) {
       <td class="p-3.5 text-right space-x-1">
         <button onclick="cobrarPixDaTabela('${encodeURIComponent(JSON.stringify(os))}')" title="Gerar QR Code Pix" class="p-1 text-teal-400 hover:text-teal-300"><i data-lucide="qr-code" class="w-4 h-4 inline"></i></button>
         <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Lançar Pagamentos" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
-        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp (Envia resumo e Pix separado)" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
+        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
         <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
         <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
       </td>
@@ -1171,7 +1174,7 @@ window.excluirCaixa = async function(id) {
   }
 };
 
-// Envia a notificação da OS e, se houver saldo Pix pendente, dispara uma 2ª mensagem isolada só com o código Pix
+// Notificação geral da OS via WhatsApp (clique único, sem bloqueio de pop-up)
 window.abrirWhatsAppOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
   const foneLimpo = os.telefone.replace(/\D/g, '');
@@ -1187,12 +1190,11 @@ window.abrirWhatsAppOS = function(json) {
     resumoPagto += `\n*Pagamentos Registrados:*\n${listaStr}\n*Saldo Restante:* ${formatarMoeda(falta)}`;
   }
 
-  let payloadPix = null;
-  let avisoPix = '';
+  let blocoPix = '';
   if (falta > 0) {
-    payloadPix = PixGenerator.gerarPayload(falta, `OS${String(os.numero_sequencial).padStart(3, '0')}`);
+    const payloadPix = PixGenerator.gerarPayload(falta, `OS${String(os.numero_sequencial).padStart(3, '0')}`);
     if (payloadPix) {
-      avisoPix = `\n\n_Para pagar o saldo de ${formatarMoeda(falta)} via Pix, basta copiar o código isolado da mensagem abaixo e colar na opção "Pix Copia e Cola" do seu banco._`;
+      blocoPix = `\n\n*Pix Copia e Cola (${formatarMoeda(falta)}):*\n\n${payloadPix}`;
     }
   }
 
@@ -1201,16 +1203,10 @@ window.abrirWhatsAppOS = function(json) {
       `Olá, *${os.cliente}*!\n` +
       `Status do seu aparelho (*${os.aparelho}*): *${os.status}*\n\n` +
       `*Diagnóstico:* ${os.laudo || 'Em análise'}\n` +
-      `${resumoPagto}${avisoPix}\n\n` +
+      `${resumoPagto}${blocoPix}\n\n` +
       `Garantia legal de 90 dias após a retirada. Qualquer dúvida estamos à disposição!`;
 
   window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msgResumo)}`, '_blank');
-
-  if (payloadPix) {
-    setTimeout(() => {
-      window.open(`https://wa.me/${fone}?text=${encodeURIComponent(payloadPix)}`, '_blank');
-    }, 800);
-  }
 };
 
 window.imprimirOS = function(json, numero) {
