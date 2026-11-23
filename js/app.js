@@ -1,15 +1,122 @@
 /**
- * App - Controlador Central com Múltiplos Pagamentos (Data/Hora), Edição e Envio Individual ao Caixa
+ * App - Controlador Central com Gerador Oficial de QR Code Pix (BR Code / CRC16),
+ * Múltiplos Pagamentos (Data/Hora), Checklist e Relatórios
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
 
 let todasAsOrdens = [];
 let ordensFiltradasAtual = [];
-
-// Lista temporária de pagamentos da OS aberta no modal
 let pagamentosAtuaisOS = [];
 
+// Contexto da cobrança Pix aberta no modal
+let contextoPixAtual = {
+  cliente: '',
+  telefone: '',
+  aparelho: '',
+  numeroOS: '000'
+};
+
+// ==========================================================================
+// GERADOR OFICIAL DE PAYLOAD PIX (EMV / BR CODE - BANCO CENTRAL)
+// ==========================================================================
+const PixGenerator = {
+  getConfig() {
+    return {
+      chave: localStorage.getItem('codefix_pix_chave') || '',
+      nome: localStorage.getItem('codefix_pix_nome') || 'CODE & FIX',
+      cidade: localStorage.getItem('codefix_pix_cidade') || 'LIMEIRA'
+    };
+  },
+
+  saveConfig(chave, nome, cidade) {
+    localStorage.setItem('codefix_pix_chave', (chave || '').trim());
+    localStorage.setItem('codefix_pix_nome', this.normalizarTexto(nome || 'CODE & FIX', 25));
+    localStorage.setItem('codefix_pix_cidade', this.normalizarTexto(cidade || 'LIMEIRA', 15));
+  },
+
+  normalizarTexto(str, maxLen) {
+    return str
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9 &.-]/g, '')
+        .toUpperCase()
+        .trim()
+        .slice(0, maxLen) || 'CODE FIX';
+  },
+
+  formatField(id, value) {
+    const len = String(value.length).padStart(2, '0');
+    return `${id}${len}${value}`;
+  },
+
+  crc16(payload) {
+    let crc = 0xFFFF;
+    const polynomial = 0x1021;
+    for (let i = 0; i < payload.length; i++) {
+      crc ^= payload.charCodeAt(i) << 8;
+      for (let j = 0; j < 8; j++) {
+        if ((crc & 0x8000) !== 0) {
+          crc = ((crc << 1) ^ polynomial) & 0xFFFF;
+        } else {
+          crc = (crc << 1) & 0xFFFF;
+        }
+      }
+    }
+    return crc.toString(16).toUpperCase().padStart(4, '0');
+  },
+
+  gerarPayload(valor, txid = 'CODEFIX') {
+    const cfg = this.getConfig();
+    if (!cfg.chave) return null;
+
+    const chaveLimpa = cfg.chave.trim();
+    const nomeLimpo = this.normalizarTexto(cfg.nome, 25);
+    const cidadeLimpa = this.normalizarTexto(cfg.cidade, 15);
+    const txidLimpo = txid.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 25) || '***';
+
+    // 26 - Merchant Account Information (GUI + Chave Pix)
+    const gui = this.formatField('00', 'br.gov.bcb.pix');
+    const keyField = this.formatField('01', chaveLimpa);
+    const merchantAccount = this.formatField('26', gui + keyField);
+
+    // 52 - Merchant Category Code (0000)
+    const mcc = this.formatField('52', '0000');
+    // 53 - Transaction Currency (986 = BRL)
+    const currency = this.formatField('53', '986');
+    // 54 - Transaction Amount
+    const valorNum = parseFloat(valor) || 0;
+    const amount = valorNum > 0 ? this.formatField('54', valorNum.toFixed(2)) : '';
+    // 58 - Country Code
+    const country = this.formatField('58', 'BR');
+    // 59 - Merchant Name
+    const merchantName = this.formatField('59', nomeLimpo);
+    // 60 - Merchant City
+    const merchantCity = this.formatField('60', cidadeLimpa);
+    // 62 - Additional Data Field Template (TXID)
+    const txidField = this.formatField('05', txidLimpo);
+    const additionalData = this.formatField('62', txidField);
+
+    const payloadSemCRC =
+        this.formatField('00', '01') +
+        merchantAccount +
+        mcc +
+        currency +
+        amount +
+        country +
+        merchantName +
+        merchantCity +
+        additionalData +
+        '6304';
+
+    const crc = this.crc16(payloadSemCRC);
+    return payloadSemCRC + crc;
+  }
+};
+
+// ==========================================================================
+// ASSINATURA DIGITAL
+// ==========================================================================
 class SignaturePad {
   constructor(canvasId, clearBtnId) {
     this.canvas = document.getElementById(canvasId);
@@ -222,7 +329,6 @@ function configurarEventosUI() {
     document.getElementById('os-mao-obra').value = '0.00';
     document.getElementById('os-valor-total').value = '0.00';
 
-    // Limpa pagamentos temporários
     pagamentosAtuaisOS = [];
     resetarFormParcela();
     renderizarListaPagamentosModal();
@@ -231,6 +337,58 @@ function configurarEventosUI() {
     resetarChecklistPadrao();
     document.getElementById('modal-os-title').textContent = 'Nova Ordem de Serviço';
     document.getElementById('modal-os').classList.remove('hidden');
+  });
+
+  // Botão "Cobrar via Pix" dentro do Modal da OS
+  document.getElementById('btn-gerar-pix-modal').addEventListener('click', () => {
+    const peca = parseFloat(document.getElementById('os-custo-peca').value) || 0;
+    const mo = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+    const total = peca + mo;
+    const pago = pagamentosAtuaisOS.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const falta = Math.max(total - pago, 0);
+
+    abrirModalCobrancaPix({
+      cliente: document.getElementById('os-cliente').value || 'Cliente',
+      telefone: document.getElementById('os-telefone').value || '',
+      aparelho: document.getElementById('os-aparelho').value || 'Serviço',
+      numeroOS: 'OS',
+      valorSugerido: falta > 0 ? falta : total
+    });
+  });
+
+  // Eventos do Modal Pix
+  document.getElementById('btn-fechar-modal-pix').addEventListener('click', () => {
+    document.getElementById('modal-pix').classList.add('hidden');
+  });
+
+  document.getElementById('pix-modal-valor').addEventListener('input', (e) => {
+    atualizarQRCodePixModal(parseFloat(e.target.value) || 0);
+  });
+
+  document.getElementById('btn-copiar-pix').addEventListener('click', () => {
+    const input = document.getElementById('pix-copia-cola-texto');
+    if (!input.value) return;
+    navigator.clipboard.writeText(input.value);
+    const btn = document.getElementById('btn-copiar-pix');
+    btn.textContent = 'Copiado!';
+    setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
+  });
+
+  document.getElementById('btn-enviar-pix-whatsapp').addEventListener('click', () => {
+    const codigoPix = document.getElementById('pix-copia-cola-texto').value;
+    const valorCobrado = parseFloat(document.getElementById('pix-modal-valor').value) || 0;
+    const foneLimpo = contextoPixAtual.telefone.replace(/\D/g, '');
+    const fone = foneLimpo.startsWith('55') ? foneLimpo : `55${foneLimpo}`;
+
+    const msg =
+        `*CODE & FIX - Pagamento via Pix*\n\n` +
+        `Olá, *${contextoPixAtual.cliente}*!\n` +
+        `Segue o código *Pix Copia e Cola* referente ao serviço (*${contextoPixAtual.aparelho}* - ${contextoPixAtual.numeroOS}):\n\n` +
+        `*Valor:* ${formatarMoeda(valorCobrado)}\n\n` +
+        `Copie o código abaixo e cole na área *Pix Copia e Cola* do aplicativo do seu banco:\n\n` +
+        `${codigoPix}`;
+
+    window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msg)}`, '_blank');
   });
 
   // Adicionar ou Salvar Edição de uma Parcela de Pagamento dentro da OS
@@ -246,7 +404,6 @@ function configurarEventosUI() {
     }
 
     if (editIdx >= 0 && pagamentosAtuaisOS[editIdx]) {
-      // Atualiza parcela existente preservando o status lancado_caixa
       pagamentosAtuaisOS[editIdx] = {
         ...pagamentosAtuaisOS[editIdx],
         data_hora: dataHora,
@@ -254,7 +411,6 @@ function configurarEventosUI() {
         valor: valor
       };
     } else {
-      // Adiciona nova parcela (ainda não lançada no Livro Caixa)
       pagamentosAtuaisOS.push({
         id: Date.now().toString(),
         data_hora: dataHora,
@@ -283,11 +439,17 @@ function configurarEventosUI() {
     document.getElementById('modal-caixa').classList.remove('hidden');
   });
 
-  // Modais Configuração Nuvem
+  // Modais Configuração Nuvem & Pix
   const abrirModalSync = () => {
     const cfg = DataService.getConfig();
     document.getElementById('supabase-url').value = cfg.url;
     document.getElementById('supabase-key').value = cfg.key;
+
+    const pixCfg = PixGenerator.getConfig();
+    document.getElementById('config-pix-chave').value = pixCfg.chave;
+    document.getElementById('config-pix-nome').value = pixCfg.nome;
+    document.getElementById('config-pix-cidade').value = pixCfg.cidade;
+
     document.getElementById('modal-sync').classList.remove('hidden');
   };
   document.getElementById('btn-sync-settings').addEventListener('click', abrirModalSync);
@@ -368,13 +530,21 @@ function configurarEventosUI() {
     await carregarTudo();
   });
 
-  // Config Nuvem
+  // Salvar Config Nuvem & Pix
   document.getElementById('form-supabase-config').addEventListener('submit', async (e) => {
     e.preventDefault();
-    DataService.saveConfig(
-        document.getElementById('supabase-url').value,
-        document.getElementById('supabase-key').value
+    PixGenerator.saveConfig(
+        document.getElementById('config-pix-chave').value,
+        document.getElementById('config-pix-nome').value,
+        document.getElementById('config-pix-cidade').value
     );
+
+    const url = document.getElementById('supabase-url').value;
+    const key = document.getElementById('supabase-key').value;
+    if (url && key) {
+      DataService.saveConfig(url, key);
+    }
+
     document.getElementById('modal-sync').classList.add('hidden');
     window.location.reload();
   });
@@ -387,6 +557,62 @@ function configurarEventosUI() {
 
   document.getElementById('btn-exportar-csv').addEventListener('click', exportarCSV);
 }
+
+// ==========================================================================
+// CONTROLE DO MODAL DE COBRANÇA PIX
+// ==========================================================================
+function abrirModalCobrancaPix({ cliente, telefone, aparelho, numeroOS, valorSugerido }) {
+  const pixCfg = PixGenerator.getConfig();
+  if (!pixCfg.chave) {
+    alert('Configure primeiro sua Chave Pix clicando no botão de status no topo da tela (Configurações da Nuvem & Recebimento Pix).');
+    document.getElementById('btn-sync-settings').click();
+    return;
+  }
+
+  contextoPixAtual = { cliente, telefone, aparelho, numeroOS };
+
+  document.getElementById('pix-modal-cliente').textContent = cliente;
+  document.getElementById('pix-modal-ref').textContent = `${numeroOS} (${aparelho})`;
+  document.getElementById('pix-modal-valor').value = parseFloat(valorSugerido || 0).toFixed(2);
+
+  atualizarQRCodePixModal(valorSugerido);
+  document.getElementById('modal-pix').classList.remove('hidden');
+}
+
+function atualizarQRCodePixModal(valor) {
+  const txid = contextoPixAtual.numeroOS.replace(/[^a-zA-Z0-9]/g, '') || 'CODEFIX';
+  const payload = PixGenerator.gerarPayload(valor, txid);
+  const container = document.getElementById('pix-qrcode-canvas');
+  container.innerHTML = '';
+
+  if (payload && window.QRCode) {
+    new QRCode(container, {
+      text: payload,
+      width: 190,
+      height: 190,
+      colorDark: '#000000',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+    document.getElementById('pix-copia-cola-texto').value = payload;
+  }
+}
+
+window.cobrarPixDaTabela = function(json) {
+  const os = JSON.parse(decodeURIComponent(json));
+  const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+  const pgts = extrairPagamentosDaOS(os);
+  const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+  const falta = Math.max(total - pago, 0);
+
+  abrirModalCobrancaPix({
+    cliente: os.cliente,
+    telefone: os.telefone,
+    aparelho: os.aparelho,
+    numeroOS: `OS${String(os.numero_sequencial).padStart(3, '0')}`,
+    valorSugerido: falta > 0 ? falta : total
+  });
+};
 
 // ==========================================================================
 // GERENCIAMENTO DE MÚLTIPLOS PAGAMENTOS NA OS
@@ -493,7 +719,6 @@ window.enviarParcelaParaCaixa = async function(idx) {
     await DataService.saveLancamento(tx);
     pagamentosAtuaisOS[idx].lancado_caixa = true;
 
-    // Se a OS já existir no banco, salva a flag imediatamente para não perder
     const idOS = document.getElementById('os-id').value;
     if (idOS) {
       await DataService.saveOS({ id: idOS, pagamentos: pagamentosAtuaisOS });
@@ -505,7 +730,6 @@ window.enviarParcelaParaCaixa = async function(idx) {
 };
 
 function extrairPagamentosDaOS(os) {
-  // Suporta o novo array 'pagamentos' e faz migração transparente caso a OS antiga só tenha 'valor_pago'
   if (Array.isArray(os.pagamentos) && os.pagamentos.length > 0) {
     return JSON.parse(JSON.stringify(os.pagamentos));
   }
@@ -792,7 +1016,6 @@ function renderizarTabelaOS(ordens) {
     const falta = Math.max(total - pago, 0);
     const dataAbertura = formatarDataHoraISO(os.created_at);
 
-    // Resumo visual das parcelas na tabela
     let detalheParcelas = '';
     if (pgts.length > 0) {
       detalheParcelas = `<div class="text-[10px] text-slate-400 mt-1 space-y-0.5">` +
@@ -833,6 +1056,7 @@ function renderizarTabelaOS(ordens) {
         ${detalheParcelas}
       </td>
       <td class="p-3.5 text-right space-x-1">
+        <button onclick="cobrarPixDaTabela('${encodeURIComponent(JSON.stringify(os))}')" title="Gerar QR Code Pix" class="p-1 text-teal-400 hover:text-teal-300"><i data-lucide="qr-code" class="w-4 h-4 inline"></i></button>
         <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Lançar Pagamentos" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
         <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
         <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
@@ -859,7 +1083,6 @@ window.editarOS = function(json) {
   document.getElementById('os-custo-peca').value = peca.toFixed(2);
   document.getElementById('os-mao-obra').value = mo.toFixed(2);
 
-  // Carrega os pagamentos da OS no modal
   pagamentosAtuaisOS = extrairPagamentosDaOS(os);
   resetarFormParcela();
   renderizarListaPagamentosModal();
@@ -954,12 +1177,21 @@ window.abrirWhatsAppOS = function(json) {
     resumoPagto += `\n*Pagamentos Registrados:*\n${listaStr}\n*Saldo Restante:* ${formatarMoeda(falta)}`;
   }
 
+  // Se houver saldo restante e chave Pix configurada, inclui o Pix Copia e Cola na notificação
+  let blocoPix = '';
+  if (falta > 0) {
+    const payloadPix = PixGenerator.gerarPayload(falta, `OS${String(os.numero_sequencial).padStart(3, '0')}`);
+    if (payloadPix) {
+      blocoPix = `\n\n*Pix Copia e Cola (${formatarMoeda(falta)}):*\n${payloadPix}`;
+    }
+  }
+
   const msg =
       `*CODE & FIX - Assistência Técnica*\n\n` +
       `Olá, *${os.cliente}*!\n` +
       `Status do seu aparelho (*${os.aparelho}*): *${os.status}*\n\n` +
       `*Diagnóstico:* ${os.laudo || 'Em análise'}\n` +
-      `${resumoPagto}\n\n` +
+      `${resumoPagto}${blocoPix}\n\n` +
       `Garantia legal de 90 dias após a retirada. Qualquer dúvida estamos à disposição!`;
   window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msg)}`, '_blank');
 };
@@ -996,6 +1228,30 @@ window.imprimirOS = function(json, numero) {
 
   document.getElementById('rec-valor-pago').textContent = pago.toFixed(2);
   document.getElementById('rec-saldo-restante').textContent = restante.toFixed(2);
+
+  // Renderiza QR Code Pix no recibo impresso se houver saldo restante
+  const pixBox = document.getElementById('rec-pix-box');
+  const pixQrDiv = document.getElementById('rec-pix-qrcode');
+  pixQrDiv.innerHTML = '';
+
+  if (restante > 0 && window.QRCode) {
+    const payload = PixGenerator.gerarPayload(restante, `OS${String(numero).padStart(3, '0')}`);
+    if (payload) {
+      new QRCode(pixQrDiv, {
+        text: payload,
+        width: 85,
+        height: 85,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.L
+      });
+      pixBox.style.display = 'block';
+    } else {
+      pixBox.style.display = 'none';
+    }
+  } else {
+    pixBox.style.display = 'none';
+  }
 
   const sigImg = document.getElementById('rec-signature-img');
   const sigBlank = document.getElementById('rec-signature-blank');

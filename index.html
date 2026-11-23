@@ -11,6 +11,8 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- QRCode.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- Supabase JS -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
@@ -45,7 +47,7 @@
 
     <div class="pt-4 border-t border-slate-800 flex justify-between items-center text-[11px] text-slate-500">
       <button id="btn-offline-mode" class="hover:text-slate-300 underline">Modo Local (Offline)</button>
-      <button id="btn-open-sync-login" class="hover:text-slate-300">Configurar Nuvem</button>
+      <button id="btn-open-sync-login" class="hover:text-slate-300">Configurar Nuvem / Pix</button>
     </div>
   </div>
 </div>
@@ -66,7 +68,7 @@
       </div>
 
       <div class="flex items-center space-x-3">
-        <button id="btn-sync-settings" class="flex items-center space-x-2 text-xs px-3 py-1.5 rounded-full border border-slate-700 bg-slate-800 hover:bg-slate-700 transition">
+        <button id="btn-sync-settings" title="Configurar Nuvem e Chave Pix" class="flex items-center space-x-2 text-xs px-3 py-1.5 rounded-full border border-slate-700 bg-slate-800 hover:bg-slate-700 transition">
           <span id="sync-indicator" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
           <span id="sync-status-text" class="text-slate-300 font-medium">LocalStorage</span>
         </button>
@@ -153,7 +155,7 @@
       <div class="flex flex-wrap justify-between items-center gap-3">
         <div>
           <h2 class="text-lg font-semibold text-slate-100">Ordens de Serviço</h2>
-          <p class="text-xs text-slate-400">Controle de bancada, checklist de entrada, múltiplos pagamentos e relatórios</p>
+          <p class="text-xs text-slate-400">Controle de bancada, checklist de entrada, cobrança Pix e relatórios</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <button id="btn-exportar-os-csv" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1.5 transition">
@@ -271,7 +273,7 @@
   </main>
 </div>
 
-<!-- MODAL: NOVA / EDITAR OS COM CHECKLIST, MÚLTIPLOS PAGAMENTOS E ASSINATURA -->
+<!-- MODAL: NOVA / EDITAR OS COM CHECKLIST, MÚLTIPLOS PAGAMENTOS, PIX E ASSINATURA -->
 <div id="modal-os" class="modal-backdrop hidden">
   <div class="bg-slate-800 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto">
     <div class="flex justify-between items-center border-b border-slate-700 pb-3">
@@ -424,9 +426,12 @@
               <i data-lucide="wallet" class="w-3.5 h-3.5"></i>
               Recebimentos & Parcelas da OS
             </span>
-          <div class="flex items-center gap-3 text-[11px] font-mono">
+          <div class="flex flex-wrap items-center gap-3 text-[11px] font-mono">
             <span class="text-slate-400">Pago: <strong id="os-resumo-pago" class="text-emerald-400">R$ 0,00</strong></span>
             <span class="text-slate-400">Falta: <strong id="os-resumo-falta" class="text-amber-400">R$ 0,00</strong></span>
+            <button type="button" id="btn-gerar-pix-modal" class="px-2 py-0.5 bg-teal-600/30 hover:bg-teal-600/50 text-teal-300 border border-teal-500/40 rounded font-sans font-semibold flex items-center gap-1 transition">
+              <i data-lucide="qr-code" class="w-3 h-3"></i> Cobrar via Pix
+            </button>
           </div>
         </div>
 
@@ -473,9 +478,7 @@
               <th class="py-1.5 px-2 text-right">Ações</th>
             </tr>
             </thead>
-            <tbody id="lista-pagamentos-os-body" class="divide-y divide-slate-800/80">
-            <!-- Preenchido via JS -->
-            </tbody>
+            <tbody id="lista-pagamentos-os-body" class="divide-y divide-slate-800/80"></tbody>
           </table>
         </div>
       </div>
@@ -496,6 +499,51 @@
         <button type="submit" class="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold">Salvar OS</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- MODAL: COBRANÇA PIX (QR CODE + COPIA E COLA) -->
+<div id="modal-pix" class="modal-backdrop hidden">
+  <div class="bg-slate-800 border border-slate-700 w-full max-w-sm rounded-2xl p-6 space-y-4 text-xs">
+    <div class="flex justify-between items-center border-b border-slate-700 pb-3">
+      <h3 class="text-sm font-semibold text-teal-400 flex items-center gap-2">
+        <i data-lucide="qr-code" class="w-4 h-4"></i>
+        <span>Cobrança Instantânea via Pix</span>
+      </h3>
+      <button type="button" id="btn-fechar-modal-pix" class="text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+
+    <div class="space-y-3">
+      <div class="bg-slate-900/70 p-2.5 rounded-lg border border-slate-700/70">
+        <p class="text-slate-400 text-[11px]">Cliente: <strong id="pix-modal-cliente" class="text-slate-200"></strong></p>
+        <p class="text-slate-400 text-[11px]">Referência: <strong id="pix-modal-ref" class="text-cyan-400"></strong></p>
+      </div>
+
+      <div>
+        <label class="block text-slate-400 mb-1">Valor a Cobrar no QR Code (R$)</label>
+        <input type="number" step="0.01" id="pix-modal-valor" class="form-input text-base font-bold text-emerald-400">
+      </div>
+
+      <!-- Container onde o QR Code será desenhado -->
+      <div class="flex flex-col items-center justify-center bg-white p-4 rounded-xl mx-auto w-fit shadow-inner">
+        <div id="pix-qrcode-canvas"></div>
+      </div>
+
+      <div>
+        <label class="block text-slate-400 mb-1">Código Pix Copia e Cola</label>
+        <div class="flex gap-1.5">
+          <input type="text" id="pix-copia-cola-texto" readonly class="form-input font-mono text-[10px] bg-slate-950 text-slate-300">
+          <button type="button" id="btn-copiar-pix" class="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-semibold whitespace-nowrap transition">
+            Copiar
+          </button>
+        </div>
+      </div>
+
+      <button type="button" id="btn-enviar-pix-whatsapp" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition">
+        <i data-lucide="message-circle" class="w-4 h-4"></i>
+        <span>Enviar Cobrança Pix no WhatsApp</span>
+      </button>
+    </div>
   </div>
 </div>
 
@@ -549,28 +597,50 @@
   </div>
 </div>
 
-<!-- MODAL: CONFIGURAÇÃO SUPABASE -->
+<!-- MODAL: CONFIGURAÇÃO SUPABASE & CHAVE PIX -->
 <div id="modal-sync" class="modal-backdrop hidden">
-  <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-4 text-xs">
+  <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-4 text-xs max-h-[90vh] overflow-y-auto">
     <div class="flex justify-between items-center border-b border-slate-700 pb-3">
       <h3 class="text-sm font-semibold text-slate-100 flex items-center space-x-2">
-        <i data-lucide="cloud" class="w-4 h-4 text-cyan-400"></i>
-        <span>Configuração da Nuvem (Supabase)</span>
+        <i data-lucide="settings" class="w-4 h-4 text-cyan-400"></i>
+        <span>Configurações da Nuvem & Recebimento Pix</span>
       </h3>
       <button class="btn-close-modal text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
     </div>
-    <form id="form-supabase-config" class="space-y-3">
-      <div>
-        <label class="block text-slate-400 mb-1">Project URL</label>
-        <input type="text" id="supabase-url" placeholder="https://xyz.supabase.co" class="form-input">
+    <form id="form-supabase-config" class="space-y-4">
+      <div class="space-y-2.5">
+        <h4 class="text-[11px] font-semibold text-cyan-400 uppercase tracking-wider">1. Banco de Dados (Supabase)</h4>
+        <div>
+          <label class="block text-slate-400 mb-1">Project URL</label>
+          <input type="text" id="supabase-url" placeholder="https://xyz.supabase.co" class="form-input">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Anon Public Key</label>
+          <input type="password" id="supabase-key" placeholder="eyJhbGciOi..." class="form-input">
+        </div>
       </div>
-      <div>
-        <label class="block text-slate-400 mb-1">Anon Public Key</label>
-        <input type="password" id="supabase-key" placeholder="eyJhbGciOi..." class="form-input">
+
+      <div class="space-y-2.5 pt-3 border-t border-slate-700">
+        <h4 class="text-[11px] font-semibold text-teal-400 uppercase tracking-wider">2. Dados para Gerador de QR Code Pix</h4>
+        <div>
+          <label class="block text-slate-400 mb-1">Sua Chave Pix (CNPJ, E-mail, Celular c/ +55 ou Chave Aleatória)</label>
+          <input type="text" id="config-pix-chave" placeholder="Ex: 00000000000199 ou +5519981586973" class="form-input">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-400 mb-1">Nome do Recebedor (sem acentos)</label>
+            <input type="text" id="config-pix-nome" value="CODE & FIX" maxlength="25" class="form-input">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">Cidade (sem acentos)</label>
+            <input type="text" id="config-pix-cidade" value="LIMEIRA" maxlength="15" class="form-input">
+          </div>
+        </div>
       </div>
-      <div class="pt-2 flex justify-between items-center">
-        <button type="button" id="btn-clear-supabase" class="text-rose-400 hover:underline">Limpar e Usar Local</button>
-        <button type="submit" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold">Salvar Conexão</button>
+
+      <div class="pt-3 border-t border-slate-700 flex justify-between items-center">
+        <button type="button" id="btn-clear-supabase" class="text-rose-400 hover:underline">Limpar Nuvem e Usar Local</button>
+        <button type="submit" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold">Salvar Configurações</button>
       </div>
     </form>
   </div>
@@ -596,11 +666,18 @@
       <p><strong>CHECKLIST DE ENTRADA:</strong> <span id="rec-checklist"></span></p>
     </div>
     <hr>
-    <div class="receipt-section">
-      <p><strong>Custo Peças:</strong> R$ <span id="rec-pecas">0,00</span> | <strong>Mão de Obra:</strong> R$ <span id="rec-mao-obra">0,00</span></p>
-      <p class="receipt-total"><strong>VALOR TOTAL: R$ <span id="rec-total">0,00</span></strong></p>
-      <div id="rec-lista-pagamentos" style="margin-top: 6px; font-size: 11px;"></div>
-      <p style="margin-top: 4px;"><strong>Total Pago:</strong> R$ <span id="rec-valor-pago">0,00</span> | <strong>Saldo Restante:</strong> R$ <span id="rec-saldo-restante">0,00</span></p>
+    <div class="receipt-section" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+      <div>
+        <p><strong>Custo Peças:</strong> R$ <span id="rec-pecas">0,00</span> | <strong>Mão de Obra:</strong> R$ <span id="rec-mao-obra">0,00</span></p>
+        <p class="receipt-total"><strong>VALOR TOTAL: R$ <span id="rec-total">0,00</span></strong></p>
+        <div id="rec-lista-pagamentos" style="margin-top: 6px; font-size: 11px;"></div>
+        <p style="margin-top: 4px;"><strong>Total Pago:</strong> R$ <span id="rec-valor-pago">0,00</span> | <strong>Saldo Restante:</strong> R$ <span id="rec-saldo-restante">0,00</span></p>
+      </div>
+      <!-- QR Code Pix no Recibo caso haja saldo restante -->
+      <div id="rec-pix-box" style="display: none; text-align: center; border: 1px solid #ccc; padding: 6px;">
+        <div id="rec-pix-qrcode"></div>
+        <span style="font-size: 9px; display: block; margin-top: 3px;">Pague via Pix</span>
+      </div>
     </div>
     <hr>
     <div class="receipt-warranty">
