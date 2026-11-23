@@ -1,734 +1,1343 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-    <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Code & Fix - Gestão de OS & Controle MEI</title>
+/**
+ * App - Controlador Central com Gerador Oficial de QR Code Pix (BR Code / CRC16),
+ * Envio Isolado no WhatsApp, Múltiplos Pagamentos e Checklist
+ */
+let signaturePadInstance = null;
+let fluxoChartInstance = null;
 
-<!-- Tailwind CSS -->
-<script src="https://cdn.tailwindcss.com"></script>
-<!-- Lucide Icons -->
-<script src="https://unpkg.com/lucide@latest"></script>
-<!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<!-- QRCode.js -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<!-- Supabase JS -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+let todasAsOrdens = [];
+let ordensFiltradasAtual = [];
+let pagamentosAtuaisOS = [];
 
-<link rel="stylesheet" href="css/styles.css">
-</head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+let contextoPixAtual = {
+  cliente: '',
+  telefone: '',
+  aparelho: '',
+  numeroOS: '000'
+};
 
-<!-- TELA DE LOGIN -->
-<div id="auth-screen" class="fixed inset-0 bg-slate-950 flex items-center justify-center p-4 z-50">
-  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-sm w-full space-y-6 shadow-2xl">
-    <div class="text-center space-y-2">
-      <div class="inline-flex p-3 bg-cyan-500/10 rounded-xl border border-cyan-500/20 text-cyan-400">
-        <i data-lucide="cpu" class="w-8 h-8"></i>
-      </div>
-      <h2 class="text-xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">Code & Fix</h2>
-      <p class="text-xs text-slate-400">Acesso Restrito da Oficina</p>
-    </div>
+// ==========================================================================
+// GERADOR OFICIAL DE PAYLOAD PIX (EMV / BR CODE - BANCO CENTRAL)
+// ==========================================================================
+const PixGenerator = {
+  getConfig() {
+    return {
+      chave: localStorage.getItem('codefix_pix_chave') || '',
+      nome: localStorage.getItem('codefix_pix_nome') || 'CODE & FIX',
+      cidade: localStorage.getItem('codefix_pix_cidade') || 'LIMEIRA'
+    };
+  },
 
-    <form id="form-login" class="space-y-4 text-xs">
-      <div>
-        <label class="block text-slate-400 mb-1">E-mail</label>
-        <input type="email" id="login-email" required class="form-input" placeholder="seu@email.com">
-      </div>
-      <div>
-        <label class="block text-slate-400 mb-1">Senha</label>
-        <input type="password" id="login-senha" required class="form-input" placeholder="••••••••">
-      </div>
-      <button type="submit" id="btn-login-submit" class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition">
-        Entrar na Bancada
-      </button>
-    </form>
+  saveConfig(chave, nome, cidade) {
+    localStorage.setItem('codefix_pix_chave', (chave || '').trim());
+    localStorage.setItem('codefix_pix_nome', this.normalizarTexto(nome || 'CODE & FIX', 25));
+    localStorage.setItem('codefix_pix_cidade', this.normalizarTexto(cidade || 'LIMEIRA', 15));
+  },
 
-    <div class="pt-4 border-t border-slate-800 flex justify-between items-center text-[11px] text-slate-500">
-      <button id="btn-offline-mode" class="hover:text-slate-300 underline">Modo Local (Offline)</button>
-      <button id="btn-open-sync-login" class="hover:text-slate-300">Configurar Nuvem / Pix</button>
-    </div>
-  </div>
-</div>
+  normalizarTexto(str, maxLen) {
+    return str
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9 &.-]/g, '')
+        .toUpperCase()
+        .trim()
+        .slice(0, maxLen) || 'CODE FIX';
+  },
 
-<!-- APLICAÇÃO PRINCIPAL -->
-<div id="app-container" class="hidden flex-1 flex flex-col">
-  <!-- Header -->
-  <header class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 sticky top-0 z-40">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-4">
-      <div class="flex items-center space-x-3">
-        <div class="bg-cyan-500/10 p-2 rounded-lg border border-cyan-500/30 text-cyan-400">
-          <i data-lucide="cpu" class="w-5 h-5"></i>
-        </div>
-        <div>
-          <h1 class="text-lg font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">Code & Fix</h1>
-          <p class="text-[10px] text-slate-400">Bancada & Gestão MEI</p>
-        </div>
-      </div>
+  formatField(id, value) {
+    const len = String(value.length).padStart(2, '0');
+    return `${id}${len}${value}`;
+  },
 
-      <div class="flex items-center space-x-3">
-        <button id="btn-sync-settings" title="Configurar Nuvem e Chave Pix" class="flex items-center space-x-2 text-xs px-3 py-1.5 rounded-full border border-slate-700 bg-slate-800 hover:bg-slate-700 transition">
-          <span id="sync-indicator" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-          <span id="sync-status-text" class="text-slate-300 font-medium">LocalStorage</span>
+  crc16(payload) {
+    let crc = 0xFFFF;
+    const polynomial = 0x1021;
+    for (let i = 0; i < payload.length; i++) {
+      crc ^= payload.charCodeAt(i) << 8;
+      for (let j = 0; j < 8; j++) {
+        if ((crc & 0x8000) !== 0) {
+          crc = ((crc << 1) ^ polynomial) & 0xFFFF;
+        } else {
+          crc = (crc << 1) & 0xFFFF;
+        }
+      }
+    }
+    return crc.toString(16).toUpperCase().padStart(4, '0');
+  },
+
+  gerarPayload(valor, txid = 'CODEFIX') {
+    const cfg = this.getConfig();
+    if (!cfg.chave) return null;
+
+    const chaveLimpa = cfg.chave.trim();
+    const nomeLimpo = this.normalizarTexto(cfg.nome, 25);
+    const cidadeLimpa = this.normalizarTexto(cfg.cidade, 15);
+    const txidLimpo = txid.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 25) || '***';
+
+    const gui = this.formatField('00', 'br.gov.bcb.pix');
+    const keyField = this.formatField('01', chaveLimpa);
+    const merchantAccount = this.formatField('26', gui + keyField);
+
+    const mcc = this.formatField('52', '0000');
+    const currency = this.formatField('53', '986');
+    const valorNum = parseFloat(valor) || 0;
+    const amount = valorNum > 0 ? this.formatField('54', valorNum.toFixed(2)) : '';
+    const country = this.formatField('58', 'BR');
+    const merchantName = this.formatField('59', nomeLimpo);
+    const merchantCity = this.formatField('60', cidadeLimpa);
+    const txidField = this.formatField('05', txidLimpo);
+    const additionalData = this.formatField('62', txidField);
+
+    const payloadSemCRC =
+        this.formatField('00', '01') +
+        merchantAccount +
+        mcc +
+        currency +
+        amount +
+        country +
+        merchantName +
+        merchantCity +
+        additionalData +
+        '6304';
+
+    const crc = this.crc16(payloadSemCRC);
+    return payloadSemCRC + crc;
+  }
+};
+
+// ==========================================================================
+// ASSINATURA DIGITAL
+// ==========================================================================
+class SignaturePad {
+  constructor(canvasId, clearBtnId) {
+    this.canvas = document.getElementById(canvasId);
+    this.ctx = this.canvas.getContext('2d');
+    this.clearBtn = document.getElementById(clearBtnId);
+    this.isDrawing = false;
+    this.hasData = false;
+    this.currentDataURL = null;
+
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.lineWidth = 2.5;
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
+
+    this.bindEvents();
+  }
+
+  bindEvents() {
+    this.canvas.addEventListener('mousedown', (e) => this.start(e));
+    this.canvas.addEventListener('mousemove', (e) => this.draw(e));
+    window.addEventListener('mouseup', () => this.stop());
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.start(e.touches[0]);
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      this.draw(e.touches[0]);
+    }, { passive: false });
+
+    window.addEventListener('touchend', () => this.stop());
+    this.clearBtn.addEventListener('click', () => this.clear());
+  }
+
+  getPos(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (this.canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (this.canvas.height / rect.height)
+    };
+  }
+
+  start(e) {
+    this.isDrawing = true;
+    const pos = this.getPos(e);
+    this.ctx.beginPath();
+    this.ctx.moveTo(pos.x, pos.y);
+  }
+
+  draw(e) {
+    if (!this.isDrawing) return;
+    const pos = this.getPos(e);
+    this.ctx.lineTo(pos.x, pos.y);
+    this.ctx.stroke();
+    this.hasData = true;
+  }
+
+  stop() {
+    if (this.isDrawing) {
+      this.isDrawing = false;
+      this.currentDataURL = this.canvas.toDataURL('image/png');
+    }
+  }
+
+  clear() {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.hasData = false;
+    this.currentDataURL = null;
+  }
+
+  loadDataURL(dataUrl) {
+    this.clear();
+    if (!dataUrl) return;
+    const img = new Image();
+    img.onload = () => {
+      this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+      this.hasData = true;
+      this.currentDataURL = dataUrl;
+    };
+    img.src = dataUrl;
+  }
+
+  getDataURL() {
+    return this.hasData ? (this.currentDataURL || this.canvas.toDataURL('image/png')) : null;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  if (window.lucide) lucide.createIcons();
+
+  signaturePadInstance = new SignaturePad('signature-pad', 'btn-clear-sig');
+  const isCloud = DataService.init();
+
+  const logged = await DataService.checkSession();
+  if (logged) {
+    mostrarAppPrincipal(true);
+  } else if (!isCloud) {
+    mostrarAppPrincipal(false);
+  }
+
+  inicializarGrafico();
+  configurarEventosUI();
+});
+
+function mostrarAppPrincipal(isCloud) {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('app-container').classList.remove('hidden');
+  atualizarIndicadorConexao(isCloud);
+  carregarTudo();
+}
+
+function atualizarIndicadorConexao(isCloud) {
+  const dot = document.getElementById('sync-indicator');
+  const text = document.getElementById('sync-status-text');
+  if (isCloud) {
+    dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+    text.textContent = 'Nuvem Conectada';
+  } else {
+    dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+    text.textContent = 'LocalStorage';
+  }
+}
+
+function obterDataHoraAtualInput() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 16);
+}
+
+function configurarEventosUI() {
+  // Login
+  document.getElementById('form-login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('login-email').value;
+    const pass = document.getElementById('login-senha').value;
+    const res = await DataService.login(email, pass);
+    if (res.success) {
+      mostrarAppPrincipal(DataService.isCloud);
+    } else {
+      alert('Falha na autenticação: ' + res.message);
+    }
+  });
+
+  // Modo offline
+  document.getElementById('btn-offline-mode').addEventListener('click', () => {
+    mostrarAppPrincipal(false);
+  });
+
+  // Logout
+  document.getElementById('btn-logout').addEventListener('click', async () => {
+    await DataService.logout();
+    window.location.reload();
+  });
+
+  // Abas
+  const tabs = [
+    { btn: 'tab-btn-dashboard', view: 'view-dashboard' },
+    { btn: 'tab-btn-os', view: 'view-os' },
+    { btn: 'tab-btn-caixa', view: 'view-caixa' }
+  ];
+  tabs.forEach(t => {
+    document.getElementById(t.btn).addEventListener('click', () => {
+      tabs.forEach(o => {
+        document.getElementById(o.btn).classList.remove('active-tab');
+        document.getElementById(o.btn).classList.add('text-slate-400');
+        document.getElementById(o.view).classList.add('hidden');
+      });
+      document.getElementById(t.btn).classList.add('active-tab');
+      document.getElementById(t.btn).classList.remove('text-slate-400');
+      document.getElementById(t.view).classList.remove('hidden');
+    });
+  });
+
+  // Filtros de OS
+  document.getElementById('filtro-os-texto').addEventListener('input', aplicarFiltrosOS);
+  document.getElementById('filtro-os-status').addEventListener('change', aplicarFiltrosOS);
+  document.getElementById('filtro-os-data-inicio').addEventListener('change', aplicarFiltrosOS);
+  document.getElementById('filtro-os-data-fim').addEventListener('change', aplicarFiltrosOS);
+
+  document.getElementById('btn-limpar-filtros-os').addEventListener('click', () => {
+    document.getElementById('filtro-os-texto').value = '';
+    document.getElementById('filtro-os-status').value = '';
+    document.getElementById('filtro-os-data-inicio').value = '';
+    document.getElementById('filtro-os-data-fim').value = '';
+    aplicarFiltrosOS();
+  });
+
+  // Relatórios OS
+  document.getElementById('btn-exportar-os-csv').addEventListener('click', exportarRelatorioOSCSV);
+  document.getElementById('btn-imprimir-relatorio-os').addEventListener('click', imprimirRelatorioOS);
+
+  // Atalho Checklist Desligado
+  document.getElementById('chk-aparelho-desligado').addEventListener('change', (e) => {
+    const isDesligado = e.target.checked;
+    const itens = ['chk-tela', 'chk-cameras', 'chk-botoes', 'chk-wifi', 'chk-carga', 'chk-audio', 'chk-biometria'];
+    itens.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = isDesligado ? 'Não Testado' : 'OK';
+    });
+  });
+
+  // Modal Nova OS
+  document.getElementById('btn-nova-os').addEventListener('click', () => {
+    document.getElementById('form-os').reset();
+    document.getElementById('os-id').value = '';
+    signaturePadInstance.clear();
+    document.getElementById('os-custo-peca').value = '0.00';
+    document.getElementById('os-mao-obra').value = '0.00';
+    document.getElementById('os-valor-total').value = '0.00';
+
+    pagamentosAtuaisOS = [];
+    resetarFormParcela();
+    renderizarListaPagamentosModal();
+    calcularTotaisOS();
+
+    resetarChecklistPadrao();
+    document.getElementById('modal-os-title').textContent = 'Nova Ordem de Serviço';
+    document.getElementById('modal-os').classList.remove('hidden');
+  });
+
+  // Botão "Cobrar via Pix" dentro do Modal da OS
+  document.getElementById('btn-gerar-pix-modal').addEventListener('click', () => {
+    const peca = parseFloat(document.getElementById('os-custo-peca').value) || 0;
+    const mo = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+    const total = peca + mo;
+    const pago = pagamentosAtuaisOS.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const falta = Math.max(total - pago, 0);
+
+    abrirModalCobrancaPix({
+      cliente: document.getElementById('os-cliente').value || 'Cliente',
+      telefone: document.getElementById('os-telefone').value || '',
+      aparelho: document.getElementById('os-aparelho').value || 'Serviço',
+      numeroOS: 'OS',
+      valorSugerido: falta > 0 ? falta : total
+    });
+  });
+
+  // Eventos do Modal Pix
+  document.getElementById('btn-fechar-modal-pix').addEventListener('click', () => {
+    document.getElementById('modal-pix').classList.add('hidden');
+  });
+
+  document.getElementById('pix-modal-valor').addEventListener('input', (e) => {
+    atualizarQRCodePixModal(parseFloat(e.target.value) || 0);
+  });
+
+  document.getElementById('btn-copiar-pix').addEventListener('click', () => {
+    const input = document.getElementById('pix-copia-cola-texto');
+    if (!input.value) return;
+    navigator.clipboard.writeText(input.value);
+    const btn = document.getElementById('btn-copiar-pix');
+    btn.textContent = 'Copiado!';
+    setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
+  });
+
+  // Envia APENAS o código Pix Copia e Cola isolado para facilitar o toque e cópia no celular
+  document.getElementById('btn-enviar-pix-whatsapp').addEventListener('click', () => {
+    const codigoPix = document.getElementById('pix-copia-cola-texto').value;
+    if (!codigoPix) return;
+    const foneLimpo = contextoPixAtual.telefone.replace(/\D/g, '');
+    const fone = foneLimpo.startsWith('55') ? foneLimpo : `55${foneLimpo}`;
+
+    window.open(`https://wa.me/${fone}?text=${encodeURIComponent(codigoPix)}`, '_blank');
+  });
+
+  // Adicionar ou Salvar Edição de uma Parcela de Pagamento dentro da OS
+  document.getElementById('btn-salvar-parcela').addEventListener('click', () => {
+    const dataHora = document.getElementById('pagto-data-hora').value || obterDataHoraAtualInput();
+    const forma = document.getElementById('pagto-forma').value;
+    const valor = parseFloat(document.getElementById('pagto-valor').value) || 0;
+    const editIdx = parseInt(document.getElementById('pagto-edit-index').value, 10);
+
+    if (valor <= 0) {
+      alert('Informe um valor válido maior que R$ 0,00.');
+      return;
+    }
+
+    if (editIdx >= 0 && pagamentosAtuaisOS[editIdx]) {
+      pagamentosAtuaisOS[editIdx] = {
+        ...pagamentosAtuaisOS[editIdx],
+        data_hora: dataHora,
+        forma: forma,
+        valor: valor
+      };
+    } else {
+      pagamentosAtuaisOS.push({
+        id: Date.now().toString(),
+        data_hora: dataHora,
+        forma: forma,
+        valor: valor,
+        lancado_caixa: false
+      });
+    }
+
+    resetarFormParcela();
+    renderizarListaPagamentosModal();
+    calcularTotaisOS();
+  });
+
+  document.getElementById('btn-cancelar-edicao-parcela').addEventListener('click', () => {
+    resetarFormParcela();
+  });
+
+  // Modal Novo Lançamento Caixa
+  document.getElementById('btn-novo-lancamento').addEventListener('click', () => {
+    document.getElementById('form-caixa').reset();
+    document.getElementById('caixa-id').value = '';
+    document.getElementById('caixa-data').value = new Date().toISOString().split('T')[0];
+    const tituloCaixa = document.querySelector('#modal-caixa h3');
+    if (tituloCaixa) tituloCaixa.textContent = 'Novo Lançamento Financeiro';
+    document.getElementById('modal-caixa').classList.remove('hidden');
+  });
+
+  // Modais Configuração Nuvem & Pix
+  const abrirModalSync = () => {
+    const cfg = DataService.getConfig();
+    document.getElementById('supabase-url').value = cfg.url;
+    document.getElementById('supabase-key').value = cfg.key;
+
+    const pixCfg = PixGenerator.getConfig();
+    document.getElementById('config-pix-chave').value = pixCfg.chave;
+    document.getElementById('config-pix-nome').value = pixCfg.nome;
+    document.getElementById('config-pix-cidade').value = pixCfg.cidade;
+
+    document.getElementById('modal-sync').classList.remove('hidden');
+  };
+  document.getElementById('btn-sync-settings').addEventListener('click', abrirModalSync);
+  document.getElementById('btn-open-sync-login').addEventListener('click', abrirModalSync);
+
+  document.querySelectorAll('.btn-close-modal').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.add('hidden'));
+    });
+  });
+
+  // Recalcular totais ao alterar peças ou mão de obra
+  document.getElementById('os-custo-peca').addEventListener('input', calcularTotaisOS);
+  document.getElementById('os-mao-obra').addEventListener('input', calcularTotaisOS);
+
+  // Submissão OS
+  document.getElementById('form-os').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const p = parseFloat(document.getElementById('os-custo-peca').value) || 0;
+    const m = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+    const total = p + m;
+
+    const totalPago = pagamentosAtuaisOS.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const restante = Math.max(total - totalPago, 0);
+    const formasResumo = pagamentosAtuaisOS.length > 0
+        ? [...new Set(pagamentosAtuaisOS.map(item => item.forma))].join(' + ')
+        : 'Pendente';
+
+    const idExistente = document.getElementById('os-id').value;
+    const assinaturaData = signaturePadInstance.getDataURL();
+
+    const osData = {
+      cliente: document.getElementById('os-cliente').value,
+      telefone: document.getElementById('os-telefone').value.replace(/\D/g, ''),
+      aparelho: document.getElementById('os-aparelho').value,
+      status: document.getElementById('os-status').value,
+      defeito: document.getElementById('os-defeito').value,
+      laudo: document.getElementById('os-laudo').value,
+      custo_peca: p,
+      mao_obra: m,
+      total: total,
+      valor_pago: totalPago,
+      forma_pagamento: formasResumo,
+      saldo_restante: restante,
+      pagamentos: pagamentosAtuaisOS,
+      checklist: capturarChecklist(),
+      assinatura: assinaturaData
+    };
+
+    if (idExistente) {
+      osData.id = idExistente;
+    }
+
+    await DataService.saveOS(osData);
+    document.getElementById('modal-os').classList.add('hidden');
+    await carregarTudo();
+  });
+
+  // Submissão Caixa
+  document.getElementById('form-caixa').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const idExistente = document.getElementById('caixa-id').value;
+
+    const tx = {
+      tipo: document.getElementById('caixa-tipo').value,
+      categoria: document.getElementById('caixa-categoria').value,
+      descricao: document.getElementById('caixa-descricao').value,
+      data: document.getElementById('caixa-data').value,
+      valor: parseFloat(document.getElementById('caixa-valor').value) || 0
+    };
+
+    if (idExistente) {
+      tx.id = idExistente;
+    }
+
+    await DataService.saveLancamento(tx);
+    document.getElementById('modal-caixa').classList.add('hidden');
+    await carregarTudo();
+  });
+
+  // Salvar Config Nuvem & Pix
+  document.getElementById('form-supabase-config').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    PixGenerator.saveConfig(
+        document.getElementById('config-pix-chave').value,
+        document.getElementById('config-pix-nome').value,
+        document.getElementById('config-pix-cidade').value
+    );
+
+    const url = document.getElementById('supabase-url').value;
+    const key = document.getElementById('supabase-key').value;
+    if (url && key) {
+      DataService.saveConfig(url, key);
+    }
+
+    document.getElementById('modal-sync').classList.add('hidden');
+    window.location.reload();
+  });
+
+  document.getElementById('btn-clear-supabase').addEventListener('click', () => {
+    DataService.clearConfig();
+    document.getElementById('modal-sync').classList.add('hidden');
+    window.location.reload();
+  });
+
+  document.getElementById('btn-exportar-csv').addEventListener('click', exportarCSV);
+}
+
+// ==========================================================================
+// CONTROLE DO MODAL DE COBRANÇA PIX
+// ==========================================================================
+function abrirModalCobrancaPix({ cliente, telefone, aparelho, numeroOS, valorSugerido }) {
+  const pixCfg = PixGenerator.getConfig();
+  if (!pixCfg.chave) {
+    alert('Configure primeiro sua Chave Pix clicando no botão de status no topo da tela (Configurações da Nuvem & Recebimento Pix).');
+    document.getElementById('btn-sync-settings').click();
+    return;
+  }
+
+  contextoPixAtual = { cliente, telefone, aparelho, numeroOS };
+
+  document.getElementById('pix-modal-cliente').textContent = cliente;
+  document.getElementById('pix-modal-ref').textContent = `${numeroOS} (${aparelho})`;
+  document.getElementById('pix-modal-valor').value = parseFloat(valorSugerido || 0).toFixed(2);
+
+  atualizarQRCodePixModal(valorSugerido);
+  document.getElementById('modal-pix').classList.remove('hidden');
+}
+
+function atualizarQRCodePixModal(valor) {
+  const txid = contextoPixAtual.numeroOS.replace(/[^a-zA-Z0-9]/g, '') || 'CODEFIX';
+  const payload = PixGenerator.gerarPayload(valor, txid);
+  const container = document.getElementById('pix-qrcode-canvas');
+  container.innerHTML = '';
+
+  if (payload && window.QRCode) {
+    new QRCode(container, {
+      text: payload,
+      width: 190,
+      height: 190,
+      colorDark: '#000000',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+    document.getElementById('pix-copia-cola-texto').value = payload;
+  }
+}
+
+window.cobrarPixDaTabela = function(json) {
+  const os = JSON.parse(decodeURIComponent(json));
+  const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+  const pgts = extrairPagamentosDaOS(os);
+  const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+  const falta = Math.max(total - pago, 0);
+
+  abrirModalCobrancaPix({
+    cliente: os.cliente,
+    telefone: os.telefone,
+    aparelho: os.aparelho,
+    numeroOS: `OS${String(os.numero_sequencial).padStart(3, '0')}`,
+    valorSugerido: falta > 0 ? falta : total
+  });
+};
+
+// ==========================================================================
+// GERENCIAMENTO DE MÚLTIPLOS PAGAMENTOS NA OS
+// ==========================================================================
+function resetarFormParcela() {
+  document.getElementById('pagto-edit-index').value = '-1';
+  document.getElementById('pagto-data-hora').value = obterDataHoraAtualInput();
+  document.getElementById('pagto-forma').value = 'Pix';
+  document.getElementById('pagto-valor').value = '';
+  document.getElementById('btn-salvar-parcela').textContent = '+ Add';
+  document.getElementById('btn-cancelar-edicao-parcela').classList.add('hidden');
+}
+
+function calcularTotaisOS() {
+  const peca = parseFloat(document.getElementById('os-custo-peca').value) || 0;
+  const mo = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+  const total = peca + mo;
+
+  const totalPago = pagamentosAtuaisOS.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+  const restante = Math.max(total - totalPago, 0);
+
+  document.getElementById('os-valor-total').value = total.toFixed(2);
+  document.getElementById('os-resumo-pago').textContent = formatarMoeda(totalPago);
+  document.getElementById('os-resumo-falta').textContent = formatarMoeda(restante);
+}
+
+function renderizarListaPagamentosModal() {
+  const tbody = document.getElementById('lista-pagamentos-os-body');
+  tbody.innerHTML = '';
+
+  if (pagamentosAtuaisOS.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="py-3 text-center text-slate-500">Nenhum pagamento registrado nesta OS ainda.</td></tr>`;
+    return;
+  }
+
+  pagamentosAtuaisOS.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-800/40';
+
+    const dataFormatada = formatarDataHoraCurta(p.data_hora);
+    const statusCaixaHTML = p.lancado_caixa
+        ? `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-semibold">✓ No Caixa</span>`
+        : `<button type="button" onclick="enviarParcelaParaCaixa(${idx})" class="px-2 py-0.5 rounded bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-400 border border-cyan-500/30 text-[9px] font-semibold transition">Lançar no Caixa</button>`;
+
+    tr.innerHTML = `
+      <td class="py-1.5 px-2 font-mono text-slate-300 text-[10px]">${dataFormatada}</td>
+      <td class="py-1.5 px-2 font-medium text-slate-200">${p.forma}</td>
+      <td class="py-1.5 px-2 font-mono text-emerald-400 font-semibold">${formatarMoeda(p.valor)}</td>
+      <td class="py-1.5 px-2 text-center">${statusCaixaHTML}</td>
+      <td class="py-1.5 px-2 text-right space-x-1">
+        <button type="button" onclick="editarParcelaOS(${idx})" title="Editar Pagamento" class="p-0.5 text-slate-400 hover:text-cyan-400">
+          <i data-lucide="edit-2" class="w-3.5 h-3.5 inline"></i>
         </button>
-
-        <nav class="flex space-x-1 bg-slate-900/60 p-1 rounded-xl border border-slate-700/60">
-          <button id="tab-btn-dashboard" class="nav-tab active-tab px-3 py-1.5 text-xs font-medium rounded-lg">Dashboard</button>
-          <button id="tab-btn-os" class="nav-tab px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 rounded-lg">OS Bancada</button>
-          <button id="tab-btn-caixa" class="nav-tab px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 rounded-lg">Livro Caixa</button>
-        </nav>
-
-        <button id="btn-logout" title="Sair da Conta" class="p-2 text-slate-400 hover:text-rose-400 rounded-lg transition">
-          <i data-lucide="log-out" class="w-4 h-4"></i>
+        <button type="button" onclick="removerParcelaOS(${idx})" title="Remover Pagamento" class="p-0.5 text-slate-400 hover:text-rose-400">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i>
         </button>
-      </div>
-    </div>
-  </header>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
 
-  <!-- Conteúdo Principal -->
-  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
-    <!-- DASHBOARD -->
-    <section id="view-dashboard" class="space-y-6">
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl">
-          <span class="text-xs text-slate-400">Faturamento Bruto (Mês)</span>
-          <p id="dash-faturamento" class="text-2xl font-bold text-emerald-400 mt-1">R$ 0,00</p>
-          <p class="text-[10px] text-slate-500 mt-1">Base da DASN-SIMEI</p>
+  if (window.lucide) lucide.createIcons();
+}
+
+window.editarParcelaOS = function(idx) {
+  const p = pagamentosAtuaisOS[idx];
+  if (!p) return;
+
+  document.getElementById('pagto-edit-index').value = idx;
+  document.getElementById('pagto-data-hora').value = p.data_hora || obterDataHoraAtualInput();
+  document.getElementById('pagto-forma').value = p.forma;
+  document.getElementById('pagto-valor').value = parseFloat(p.valor).toFixed(2);
+
+  document.getElementById('btn-salvar-parcela').textContent = 'Salvar';
+  document.getElementById('btn-cancelar-edicao-parcela').classList.remove('hidden');
+};
+
+window.removerParcelaOS = function(idx) {
+  if (confirm('Deseja remover este registro de pagamento da OS?')) {
+    pagamentosAtuaisOS.splice(idx, 1);
+    resetarFormParcela();
+    renderizarListaPagamentosModal();
+    calcularTotaisOS();
+  }
+};
+
+window.enviarParcelaParaCaixa = async function(idx) {
+  const p = pagamentosAtuaisOS[idx];
+  if (!p || p.lancado_caixa) return;
+
+  const cliente = document.getElementById('os-cliente').value || 'Cliente';
+  const aparelho = document.getElementById('os-aparelho').value || 'Aparelho';
+  const dataApenas = (p.data_hora || new Date().toISOString()).split('T')[0];
+
+  if (confirm(`Deseja lançar ${formatarMoeda(p.valor)} (${p.forma}) no Livro Caixa agora?`)) {
+    const tx = {
+      tipo: 'entrada',
+      categoria: 'Serviço de Bancada',
+      descricao: `Pagto OS (${p.forma}) - ${cliente} (${aparelho})`,
+      data: dataApenas,
+      valor: parseFloat(p.valor)
+    };
+
+    await DataService.saveLancamento(tx);
+    pagamentosAtuaisOS[idx].lancado_caixa = true;
+
+    const idOS = document.getElementById('os-id').value;
+    if (idOS) {
+      await DataService.saveOS({ id: idOS, pagamentos: pagamentosAtuaisOS });
+    }
+
+    renderizarListaPagamentosModal();
+    await carregarTudo();
+  }
+};
+
+function extrairPagamentosDaOS(os) {
+  if (Array.isArray(os.pagamentos) && os.pagamentos.length > 0) {
+    return JSON.parse(JSON.stringify(os.pagamentos));
+  }
+  const valorAntigo = parseFloat(os.valor_pago || 0);
+  if (valorAntigo > 0) {
+    return [{
+      id: 'legacy-1',
+      data_hora: os.created_at ? os.created_at.slice(0, 16) : obterDataHoraAtualInput(),
+      forma: os.forma_pagamento || 'Pix',
+      valor: valorAntigo,
+      lancado_caixa: false
+    }];
+  }
+  return [];
+}
+
+// ==========================================================================
+// FUNÇÕES DO CHECKLIST DE ENTRADA
+// ==========================================================================
+function resetarChecklistPadrao() {
+  document.getElementById('chk-aparelho-desligado').checked = false;
+  document.getElementById('chk-tela').value = 'OK';
+  document.getElementById('chk-cameras').value = 'OK';
+  document.getElementById('chk-botoes').value = 'OK';
+  document.getElementById('chk-wifi').value = 'OK';
+  document.getElementById('chk-carga').value = 'OK';
+  document.getElementById('chk-audio').value = 'OK';
+  document.getElementById('chk-biometria').value = 'OK';
+  document.getElementById('chk-carcaca').value = 'Intacta';
+}
+
+function capturarChecklist() {
+  return {
+    desligado: document.getElementById('chk-aparelho-desligado').checked,
+    tela: document.getElementById('chk-tela').value,
+    cameras: document.getElementById('chk-cameras').value,
+    botoes: document.getElementById('chk-botoes').value,
+    wifi: document.getElementById('chk-wifi').value,
+    carga: document.getElementById('chk-carga').value,
+    audio: document.getElementById('chk-audio').value,
+    biometria: document.getElementById('chk-biometria').value,
+    carcaca: document.getElementById('chk-carcaca').value
+  };
+}
+
+function preencherChecklistNoModal(chk) {
+  resetarChecklistPadrao();
+  if (!chk) return;
+  document.getElementById('chk-aparelho-desligado').checked = !!chk.desligado;
+  if (chk.tela) document.getElementById('chk-tela').value = chk.tela;
+  if (chk.cameras) document.getElementById('chk-cameras').value = chk.cameras;
+  if (chk.botoes) document.getElementById('chk-botoes').value = chk.botoes;
+  if (chk.wifi) document.getElementById('chk-wifi').value = chk.wifi;
+  if (chk.carga) document.getElementById('chk-carga').value = chk.carga;
+  if (chk.audio) document.getElementById('chk-audio').value = chk.audio;
+  if (chk.biometria) document.getElementById('chk-biometria').value = chk.biometria;
+  if (chk.carcaca) document.getElementById('chk-carcaca').value = chk.carcaca;
+}
+
+function formatarChecklistTexto(chk) {
+  if (!chk || Object.keys(chk).length === 0) return 'Não preenchido';
+  if (chk.desligado) {
+    return `Aparelho entrou desligado/sem imagem (periféricos não testados). Carcaça: ${chk.carcaca || 'Intacta'}.`;
+  }
+  return `Tela: ${chk.tela} | Câmeras: ${chk.cameras} | Botões: ${chk.botoes} | Wi-Fi: ${chk.wifi} | Carga: ${chk.carga} | Áudio: ${chk.audio} | Biometria: ${chk.biometria} | Carcaça: ${chk.carcaca}`;
+}
+
+async function carregarTudo() {
+  const [ordens, caixa] = await Promise.all([DataService.getOS(), DataService.getCaixa()]);
+
+  todasAsOrdens = ordens.map((os, index) => ({
+    ...os,
+    numero_sequencial: ordens.length - index
+  }));
+
+  aplicarFiltrosOS();
+  renderizarTabelaCaixa(caixa);
+  processarPainelMEI(caixa, todasAsOrdens);
+}
+
+// ==========================================================================
+// FILTROS E RELATÓRIOS DAS ORDENS DE SERVIÇO
+// ==========================================================================
+function aplicarFiltrosOS() {
+  const termo = document.getElementById('filtro-os-texto').value.toLowerCase().trim();
+  const statusFiltro = document.getElementById('filtro-os-status').value;
+  const dataInicio = document.getElementById('filtro-os-data-inicio').value;
+  const dataFim = document.getElementById('filtro-os-data-fim').value;
+
+  ordensFiltradasAtual = todasAsOrdens.filter(os => {
+    const matchTexto = !termo ||
+        (os.cliente && os.cliente.toLowerCase().includes(termo)) ||
+        (os.aparelho && os.aparelho.toLowerCase().includes(termo)) ||
+        (os.telefone && os.telefone.includes(termo));
+
+    const matchStatus = !statusFiltro || os.status === statusFiltro;
+
+    let matchData = true;
+    if (os.created_at) {
+      const dataOS = os.created_at.split('T')[0];
+      if (dataInicio && dataOS < dataInicio) matchData = false;
+      if (dataFim && dataOS > dataFim) matchData = false;
+    }
+
+    return matchTexto && matchStatus && matchData;
+  });
+
+  renderizarTabelaOS(ordensFiltradasAtual);
+  atualizarResumoFiltroOS(ordensFiltradasAtual);
+}
+
+function atualizarResumoFiltroOS(lista) {
+  let somaTotal = 0;
+  let somaPago = 0;
+  let somaFalta = 0;
+
+  lista.forEach(os => {
+    const tot = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+    const pgts = extrairPagamentosDaOS(os);
+    const pg = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const flt = Math.max(tot - pg, 0);
+
+    somaTotal += tot;
+    somaPago += pg;
+    somaFalta += flt;
+  });
+
+  document.getElementById('os-filtro-qtd').textContent = lista.length;
+  document.getElementById('os-filtro-total').textContent = formatarMoeda(somaTotal);
+  document.getElementById('os-filtro-pago').textContent = formatarMoeda(somaPago);
+  document.getElementById('os-filtro-falta').textContent = formatarMoeda(somaFalta);
+}
+
+function exportarRelatorioOSCSV() {
+  if (ordensFiltradasAtual.length === 0) {
+    alert('Nenhuma Ordem de Serviço filtrada para gerar relatório.');
+    return;
+  }
+
+  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Detalhe_Pagamentos;Total;Valor_Pago;Saldo_Restante\n';
+  ordensFiltradasAtual.forEach(os => {
+    const dataFmt = formatarDataHoraISO(os.created_at);
+    const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
+    const pgts = extrairPagamentosDaOS(os);
+    const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0).toFixed(2);
+    const falta = Math.max(total - pago, 0).toFixed(2);
+
+    const detalhePg = pgts.length > 0
+        ? pgts.map(p => `${formatarDataHoraCurta(p.data_hora)} - ${p.forma}: R$${parseFloat(p.valor).toFixed(2)}`).join(' | ')
+        : 'Pendente';
+
+    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${detalhePg}";${total};${pago};${falta}\n`;
+  });
+
+  const link = document.createElement('a');
+  link.setAttribute('href', encodeURI(csv));
+  link.setAttribute('download', `relatorio_os_code_and_fix_${new Date().toISOString().split('T')[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function imprimirRelatorioOS() {
+  if (ordensFiltradasAtual.length === 0) {
+    alert('Nenhuma Ordem de Serviço na lista para imprimir relatório.');
+    return;
+  }
+
+  const tbody = document.getElementById('rep-tabela-body');
+  tbody.innerHTML = '';
+
+  let somaGeral = 0;
+  let somaPago = 0;
+  let somaFalta = 0;
+
+  ordensFiltradasAtual.forEach(os => {
+    const tot = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+    const pgts = extrairPagamentosDaOS(os);
+    const pg = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const flt = Math.max(tot - pg, 0);
+
+    const formasResumo = pgts.length > 0
+        ? pgts.map(p => `${p.forma} (${formatarMoeda(p.valor)})`).join(', ')
+        : 'Pendente';
+
+    somaGeral += tot;
+    somaPago += pg;
+    somaFalta += flt;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>#${String(os.numero_sequencial).padStart(3, '0')}</td>
+      <td>${formatarDataHoraISO(os.created_at)}</td>
+      <td>${os.cliente}</td>
+      <td>${os.aparelho}</td>
+      <td>${os.status}</td>
+      <td>${formasResumo}</td>
+      <td style="text-align: right;">${formatarMoeda(tot)}</td>
+      <td style="text-align: right;">${formatarMoeda(pg)}</td>
+      <td style="text-align: right;"><strong>${formatarMoeda(flt)}</strong></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  const dIni = document.getElementById('filtro-os-data-inicio').value;
+  const dFim = document.getElementById('filtro-os-data-fim').value;
+  const st = document.getElementById('filtro-os-status').value;
+
+  let textoPeriodo = 'Período: Todos os registros';
+  if (dIni || dFim) {
+    textoPeriodo = `Período: ${dIni ? formatarData(dIni) : 'Início'} até ${dFim ? formatarData(dFim) : 'Hoje'}`;
+  }
+  if (st) textoPeriodo += ` | Status: ${st}`;
+
+  document.getElementById('rep-periodo').textContent = textoPeriodo;
+  document.getElementById('rep-gerado-em').textContent = new Date().toLocaleString('pt-BR');
+  document.getElementById('rep-total-qtd').textContent = ordensFiltradasAtual.length;
+  document.getElementById('rep-total-geral').textContent = formatarMoeda(somaGeral);
+  document.getElementById('rep-total-pago').textContent = formatarMoeda(somaPago);
+  document.getElementById('rep-total-falta').textContent = formatarMoeda(somaFalta);
+
+  document.body.classList.remove('printing-receipt');
+  document.body.classList.add('printing-report');
+  window.print();
+}
+
+// ==========================================================================
+// DASHBOARD & TABELAS
+// ==========================================================================
+function processarPainelMEI(caixa, ordens) {
+  const mesAtual = new Date().getMonth();
+  const anoAtual = new Date().getFullYear();
+
+  let fatMes = 0;
+  let despMes = 0;
+  let fatAno = 0;
+
+  caixa.forEach(tx => {
+    const d = new Date(tx.data);
+    const v = parseFloat(tx.valor) || 0;
+    if (d.getFullYear() === anoAtual) {
+      if (tx.tipo === 'entrada') fatAno += v;
+      if (d.getMonth() === mesAtual) {
+        if (tx.tipo === 'entrada') fatMes += v;
+        else despMes += v;
+      }
+    }
+  });
+
+  const lucroReal = fatMes - despMes;
+  const isencao32 = fatMes * 0.32;
+
+  document.getElementById('dash-faturamento').textContent = formatarMoeda(fatMes);
+  document.getElementById('dash-despesas').textContent = formatarMoeda(despMes);
+  document.getElementById('dash-lucro').textContent = formatarMoeda(lucroReal);
+  document.getElementById('dash-isencao').textContent = formatarMoeda(isencao32);
+
+  const percTeto = Math.min((fatAno / 81000) * 100, 100).toFixed(1);
+  document.getElementById('mei-accumulated-text').textContent = `${formatarMoeda(fatAno)} / R$ 81.000,00 (${percTeto}%)`;
+  document.getElementById('mei-progress-bar').style.width = `${percTeto}%`;
+
+  document.getElementById('stat-em-analise').textContent = ordens.filter(o => o.status === 'Em Análise').length;
+  document.getElementById('stat-aguardando').textContent = ordens.filter(o => o.status === 'Aguardando Peça').length;
+  document.getElementById('stat-pronto').textContent = ordens.filter(o => o.status === 'Pronto para Retirada').length;
+  document.getElementById('stat-finalizados').textContent = ordens.filter(o => o.status === 'Entregue / Concluído').length;
+
+  atualizarGrafico(fatMes, despMes);
+}
+
+function renderizarTabelaOS(ordens) {
+  const tbody = document.getElementById('tabela-os-body');
+  tbody.innerHTML = '';
+  if (ordens.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhuma OS encontrada com os filtros aplicados.</td></tr>`;
+    return;
+  }
+
+  ordens.forEach(os => {
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-800/40 transition';
+    const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+    const pgts = extrairPagamentosDaOS(os);
+    const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const falta = Math.max(total - pago, 0);
+    const dataAbertura = formatarDataHoraISO(os.created_at);
+
+    let detalheParcelas = '';
+    if (pgts.length > 0) {
+      detalheParcelas = `<div class="text-[10px] text-slate-400 mt-1 space-y-0.5">` +
+          pgts.map(p => `<div>• ${p.forma}: ${formatarMoeda(p.valor)} <span class="text-slate-500">(${formatarDataHoraCurta(p.data_hora)})</span></div>`).join('') +
+          `</div>`;
+    }
+
+    let badgeFinanceiro = '';
+    if (total === 0) {
+      badgeFinanceiro = `<span class="text-[10px] text-slate-500">Orçamento R$ 0,00</span>`;
+    } else if (falta <= 0) {
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">Quitado</span>`;
+    } else if (pago > 0) {
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-semibold">Falta ${formatarMoeda(falta)}</span>`;
+    } else {
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-semibold">Pendente</span>`;
+    }
+
+    tr.innerHTML = `
+      <td class="p-3.5 font-mono text-cyan-400">#${String(os.numero_sequencial).padStart(3, '0')}</td>
+      <td class="p-3.5 font-mono text-slate-400 text-[11px]">${dataAbertura}</td>
+      <td class="p-3.5 font-medium text-slate-200">${os.cliente}</td>
+      <td class="p-3.5">${os.aparelho}</td>
+      <td class="p-3.5">
+        <select onchange="atualizarStatusRapido('${os.id}', this.value)" class="bg-slate-900 border border-slate-700 text-[11px] font-semibold rounded px-2 py-1 outline-none cursor-pointer ${obterCorTextoStatus(os.status)}">
+          <option value="Em Análise" ${os.status === 'Em Análise' ? 'selected' : ''}>Em Análise</option>
+          <option value="Aguardando Aprovação" ${os.status === 'Aguardando Aprovação' ? 'selected' : ''}>Aguardando Aprovação</option>
+          <option value="Aguardando Peça" ${os.status === 'Aguardando Peça' ? 'selected' : ''}>Aguardando Peça</option>
+          <option value="Pronto para Retirada" ${os.status === 'Pronto para Retirada' ? 'selected' : ''}>Pronto para Retirada</option>
+          <option value="Entregue / Concluído" ${os.status === 'Entregue / Concluído' ? 'selected' : ''}>Entregue / Concluído</option>
+        </select>
+      </td>
+      <td class="p-3.5">
+        <div class="flex items-center gap-2">
+          <span class="font-mono font-semibold text-slate-100">${formatarMoeda(total)}</span>
+          ${badgeFinanceiro}
         </div>
-        <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl">
-          <span class="text-xs text-slate-400">Despesas / Peças (Mês)</span>
-          <p id="dash-despesas" class="text-2xl font-bold text-rose-400 mt-1">R$ 0,00</p>
-          <p class="text-[10px] text-slate-500 mt-1">Insumos e impostos</p>
-        </div>
-        <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl">
-          <span class="text-xs text-slate-400">Lucro Líquido Real</span>
-          <p id="dash-lucro" class="text-2xl font-bold text-cyan-400 mt-1">R$ 0,00</p>
-          <p class="text-[10px] text-slate-500 mt-1">Saldo gerado no caixa</p>
-        </div>
-        <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl">
-          <span class="text-xs text-slate-400">Parcela Isenta PF (32%)</span>
-          <p id="dash-isencao" class="text-2xl font-bold text-indigo-400 mt-1">R$ 0,00</p>
-          <p class="text-[10px] text-slate-500 mt-1">Retirada isenta de IRPF</p>
-        </div>
-      </div>
+        ${detalheParcelas}
+      </td>
+      <td class="p-3.5 text-right space-x-1">
+        <button onclick="cobrarPixDaTabela('${encodeURIComponent(JSON.stringify(os))}')" title="Gerar QR Code Pix" class="p-1 text-teal-400 hover:text-teal-300"><i data-lucide="qr-code" class="w-4 h-4 inline"></i></button>
+        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Lançar Pagamentos" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp (Envia resumo e Pix separado)" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
+        <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
+        <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+  if (window.lucide) lucide.createIcons();
+}
 
-      <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl space-y-2">
-        <div class="flex justify-between text-xs">
-          <span class="text-slate-300 font-medium">Teto Anual MEI (R$ 81.000,00)</span>
-          <span id="mei-accumulated-text" class="text-slate-400 font-mono">R$ 0,00 (0%)</span>
-        </div>
-        <div class="w-full bg-slate-700/50 h-2.5 rounded-full overflow-hidden">
-          <div id="mei-progress-bar" class="bg-gradient-to-r from-cyan-500 to-emerald-400 h-full w-0 transition-all duration-500"></div>
-        </div>
-      </div>
+window.editarOS = function(json) {
+  const os = JSON.parse(decodeURIComponent(json));
+  const peca = parseFloat(os.custo_peca || 0);
+  const mo = parseFloat(os.mao_obra || 0);
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div class="lg:col-span-2 bg-slate-800/60 border border-slate-700 p-5 rounded-xl">
-          <h3 class="text-sm font-semibold text-slate-200 mb-4">Fluxo Financeiro (Entradas vs Saídas)</h3>
-          <div class="h-64"><canvas id="chart-fluxo"></canvas></div>
-        </div>
-        <div class="bg-slate-800/60 border border-slate-700 p-5 rounded-xl space-y-3">
-          <h3 class="text-sm font-semibold text-slate-200">Resumo da Bancada</h3>
-          <div class="flex justify-between py-2 border-b border-slate-700/60 text-xs">
-            <span class="text-slate-400">Em Análise</span>
-            <span id="stat-em-analise" class="font-semibold text-amber-400">0</span>
-          </div>
-          <div class="flex justify-between py-2 border-b border-slate-700/60 text-xs">
-            <span class="text-slate-400">Aguardando Peça</span>
-            <span id="stat-aguardando" class="font-semibold text-orange-400">0</span>
-          </div>
-          <div class="flex justify-between py-2 border-b border-slate-700/60 text-xs">
-            <span class="text-slate-400">Pronto p/ Retirada</span>
-            <span id="stat-pronto" class="font-semibold text-emerald-400">0</span>
-          </div>
-          <div class="flex justify-between py-2 text-xs">
-            <span class="text-slate-400">Finalizados no Mês</span>
-            <span id="stat-finalizados" class="font-semibold text-cyan-400">0</span>
-          </div>
-        </div>
-      </div>
-    </section>
+  document.getElementById('os-id').value = os.id || '';
+  document.getElementById('os-cliente').value = os.cliente || '';
+  document.getElementById('os-telefone').value = os.telefone || '';
+  document.getElementById('os-aparelho').value = os.aparelho || '';
+  document.getElementById('os-status').value = os.status || 'Em Análise';
+  document.getElementById('os-defeito').value = os.defeito || '';
+  document.getElementById('os-laudo').value = os.laudo || '';
+  document.getElementById('os-custo-peca').value = peca.toFixed(2);
+  document.getElementById('os-mao-obra').value = mo.toFixed(2);
 
-    <!-- ORDENS DE SERVIÇO -->
-    <section id="view-os" class="hidden space-y-4">
-      <div class="flex flex-wrap justify-between items-center gap-3">
-        <div>
-          <h2 class="text-lg font-semibold text-slate-100">Ordens de Serviço</h2>
-          <p class="text-xs text-slate-400">Controle de bancada, checklist de entrada, cobrança Pix e relatórios</p>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button id="btn-exportar-os-csv" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1.5 transition">
-            <i data-lucide="file-spreadsheet" class="w-4 h-4"></i><span>Relatório CSV</span>
-          </button>
-          <button id="btn-imprimir-relatorio-os" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1.5 transition">
-            <i data-lucide="printer" class="w-4 h-4"></i><span>Imprimir Relatório</span>
-          </button>
-          <button id="btn-nova-os" class="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition">
-            <i data-lucide="plus" class="w-4 h-4"></i><span>Nova OS</span>
-          </button>
-        </div>
-      </div>
+  pagamentosAtuaisOS = extrairPagamentosDaOS(os);
+  resetarFormParcela();
+  renderizarListaPagamentosModal();
+  calcularTotaisOS();
 
-      <!-- BARRA DE FILTROS E BUSCA -->
-      <div class="bg-slate-800/60 border border-slate-700 p-4 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs items-end">
-        <div class="lg:col-span-4">
-          <label class="block text-slate-400 mb-1">Buscar Cliente ou Aparelho</label>
-          <div class="relative">
-            <input type="text" id="filtro-os-texto" placeholder="Nome, telefone ou modelo..." class="form-input pl-8">
-              <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5"></i>
-          </div>
-        </div>
+  preencherChecklistNoModal(os.checklist);
 
-        <div class="lg:col-span-3">
-          <label class="block text-slate-400 mb-1">Filtrar por Status</label>
-          <select id="filtro-os-status" class="form-input">
-            <option value="">Todos os Status</option>
-            <option value="Em Análise">Em Análise</option>
-            <option value="Aguardando Aprovação">Aguardando Aprovação</option>
-            <option value="Aguardando Peça">Aguardando Peça</option>
-            <option value="Pronto para Retirada">Pronto para Retirada</option>
-            <option value="Entregue / Concluído">Entregue / Concluído</option>
-          </select>
-        </div>
+  if (os.assinatura) {
+    signaturePadInstance.loadDataURL(os.assinatura);
+  } else {
+    signaturePadInstance.clear();
+  }
 
-        <div class="lg:col-span-2">
-          <label class="block text-slate-400 mb-1">Data Inicial</label>
-          <input type="date" id="filtro-os-data-inicio" class="form-input">
-        </div>
+  document.getElementById('modal-os-title').textContent = 'Editar Ordem de Serviço';
+  document.getElementById('modal-os').classList.remove('hidden');
+};
 
-        <div class="lg:col-span-2">
-          <label class="block text-slate-400 mb-1">Data Final</label>
-          <input type="date" id="filtro-os-data-fim" class="form-input">
-        </div>
+window.excluirOS = async function(id) {
+  if (confirm('Tem certeza de que deseja apagar permanentemente esta Ordem de Serviço?')) {
+    await DataService.deleteOS(id);
+    await carregarTudo();
+  }
+};
 
-        <div class="lg:col-span-1">
-          <button id="btn-limpar-filtros-os" title="Limpar Filtros" class="w-full py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg flex items-center justify-center transition">
-            <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
-          </button>
-        </div>
-      </div>
+window.atualizarStatusRapido = async function(id, novoStatus) {
+  await DataService.saveOS({ id: id, status: novoStatus });
+  await carregarTudo();
+};
 
-      <!-- RESUMO DOS RESULTADOS FILTRADOS -->
-      <div class="flex flex-wrap justify-between items-center bg-slate-800/40 border border-slate-700/60 px-4 py-2.5 rounded-xl text-xs gap-2">
-        <span class="text-slate-400">Exibindo <strong id="os-filtro-qtd" class="text-slate-200">0</strong> ordem(ns)</span>
-        <div class="flex flex-wrap gap-4 font-mono">
-          <span class="text-slate-400">Total OS: <strong id="os-filtro-total" class="text-cyan-400">R$ 0,00</strong></span>
-          <span class="text-slate-400">Recebido: <strong id="os-filtro-pago" class="text-emerald-400">R$ 0,00</strong></span>
-          <span class="text-slate-400">A Receber: <strong id="os-filtro-falta" class="text-amber-400">R$ 0,00</strong></span>
-        </div>
-      </div>
+function renderizarTabelaCaixa(caixa) {
+  const tbody = document.getElementById('tabela-caixa-body');
+  tbody.innerHTML = '';
+  if (caixa.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum lançamento no caixa.</td></tr>`;
+    return;
+  }
 
-      <!-- TABELA DE OS -->
-      <div class="bg-slate-800/60 border border-slate-700 rounded-xl overflow-x-auto">
-        <table class="w-full text-left text-xs">
-          <thead class="bg-slate-800 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700">
-          <tr>
-            <th class="p-3.5">OS #</th>
-            <th class="p-3.5">Data</th>
-            <th class="p-3.5">Cliente</th>
-            <th class="p-3.5">Aparelho</th>
-            <th class="p-3.5">Status</th>
-            <th class="p-3.5">Financeiro / Pagamentos</th>
-            <th class="p-3.5 text-right">Ações</th>
-          </tr>
-          </thead>
-          <tbody id="tabela-os-body" class="divide-y divide-slate-700/60"></tbody>
-        </table>
-      </div>
-    </section>
+  caixa.forEach(tx => {
+    const tr = document.createElement('tr');
+    const isEntrada = tx.tipo === 'entrada';
+    tr.innerHTML = `
+      <td class="p-3.5 font-mono text-slate-400">${formatarData(tx.data)}</td>
+      <td class="p-3.5 font-semibold ${isEntrada ? 'text-emerald-400' : 'text-rose-400'}">${isEntrada ? 'ENTRADA' : 'SAÍDA'}</td>
+      <td class="p-3.5 text-slate-400">${tx.categoria}</td>
+      <td class="p-3.5 text-slate-200">${tx.descricao}</td>
+      <td class="p-3.5 text-right font-mono font-semibold ${isEntrada ? 'text-emerald-400' : 'text-rose-400'}">
+        ${isEntrada ? '+' : '-'} ${formatarMoeda(tx.valor)}
+      </td>
+      <td class="p-3.5 text-right space-x-1">
+        <button onclick="editarCaixa('${encodeURIComponent(JSON.stringify(tx))}')" title="Editar Lançamento" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="excluirCaixa('${tx.id}')" title="Excluir Lançamento" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+  if (window.lucide) lucide.createIcons();
+}
 
-    <!-- LIVRO CAIXA -->
-    <section id="view-caixa" class="hidden space-y-4">
-      <div class="flex justify-between items-center">
-        <div>
-          <h2 class="text-lg font-semibold text-slate-100">Livro Caixa da Conta PJ</h2>
-          <p class="text-xs text-slate-400">Separado rigorosamente da pessoa física</p>
-        </div>
-        <div class="flex space-x-2">
-          <button id="btn-exportar-csv" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-lg text-xs flex items-center space-x-1 transition">
-            <i data-lucide="download" class="w-4 h-4"></i><span>Exportar CSV</span>
-          </button>
-          <button id="btn-novo-lancamento" class="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1 transition">
-            <i data-lucide="plus" class="w-4 h-4"></i><span>Novo Lançamento</span>
-          </button>
-        </div>
-      </div>
-      <div class="bg-slate-800/60 border border-slate-700 rounded-xl overflow-x-auto">
-        <table class="w-full text-left text-xs">
-          <thead class="bg-slate-800 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700">
-          <tr>
-            <th class="p-3.5">Data</th>
-            <th class="p-3.5">Tipo</th>
-            <th class="p-3.5">Categoria</th>
-            <th class="p-3.5">Descrição</th>
-            <th class="p-3.5 text-right">Valor</th>
-            <th class="p-3.5 text-right">Ações</th>
-          </tr>
-          </thead>
-          <tbody id="tabela-caixa-body" class="divide-y divide-slate-700/60"></tbody>
-        </table>
-      </div>
-    </section>
-  </main>
-</div>
+window.editarCaixa = function(json) {
+  const tx = JSON.parse(decodeURIComponent(json));
+  document.getElementById('caixa-id').value = tx.id || '';
+  document.getElementById('caixa-tipo').value = tx.tipo || 'entrada';
+  document.getElementById('caixa-categoria').value = tx.categoria || 'Serviço de Bancada';
+  document.getElementById('caixa-descricao').value = tx.descricao || '';
+  document.getElementById('caixa-data').value = tx.data || '';
+  document.getElementById('caixa-valor').value = parseFloat(tx.valor || 0).toFixed(2);
 
-<!-- MODAL: NOVA / EDITAR OS COM CHECKLIST, MÚLTIPLOS PAGAMENTOS, PIX E ASSINATURA -->
-<div id="modal-os" class="modal-backdrop hidden">
-  <div class="bg-slate-800 border border-slate-700 w-full max-w-2xl rounded-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto">
-    <div class="flex justify-between items-center border-b border-slate-700 pb-3">
-      <h3 id="modal-os-title" class="text-sm font-semibold text-slate-100">Nova Ordem de Serviço</h3>
-      <button class="btn-close-modal text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
-    </div>
+  const tituloCaixa = document.querySelector('#modal-caixa h3');
+  if (tituloCaixa) tituloCaixa.textContent = 'Editar Lançamento Financeiro';
 
-    <form id="form-os" class="space-y-3.5 text-xs">
-      <input type="hidden" id="os-id">
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label class="block text-slate-400 mb-1">Cliente</label>
-            <input type="text" id="os-cliente" required class="form-input">
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1">WhatsApp (com DDD)</label>
-            <input type="text" id="os-telefone" placeholder="19999998888" required class="form-input">
-          </div>
-        </div>
+  document.getElementById('modal-caixa').classList.remove('hidden');
+};
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label class="block text-slate-400 mb-1">Aparelho</label>
-            <input type="text" id="os-aparelho" placeholder="Ex: Moto G84 / Notebook Dell" required class="form-input">
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1">Status</label>
-            <select id="os-status" class="form-input">
-              <option value="Em Análise">Em Análise</option>
-              <option value="Aguardando Aprovação">Aguardando Aprovação</option>
-              <option value="Aguardando Peça">Aguardando Peça</option>
-              <option value="Pronto para Retirada">Pronto para Retirada</option>
-              <option value="Entregue / Concluído">Entregue / Concluído</option>
-            </select>
-          </div>
-        </div>
+window.excluirCaixa = async function(id) {
+  if (confirm('Tem certeza de que deseja apagar este lançamento financeiro?')) {
+    await DataService.deleteLancamento(id);
+    await carregarTudo();
+  }
+};
 
-        <!-- CHECKLIST DE ENTRADA DO APARELHO -->
-        <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700/80 space-y-2.5">
-          <div class="flex flex-wrap justify-between items-center gap-2 border-b border-slate-700/60 pb-2">
-            <span class="text-[11px] font-semibold text-cyan-400 flex items-center gap-1.5">
-              <i data-lucide="clipboard-check" class="w-3.5 h-3.5"></i>
-              Checklist de Entrada (Condições na Recepção)
-            </span>
-            <label class="flex items-center space-x-1.5 text-[11px] text-amber-400 cursor-pointer">
-              <input type="checkbox" id="chk-aparelho-desligado" class="rounded bg-slate-800 border-slate-600 text-amber-500 focus:ring-0">
-                <span>Aparelho entrou desligado / sem imagem (Não testado)</span>
-            </label>
-          </div>
+// Envia a notificação da OS e, se houver saldo Pix pendente, dispara uma 2ª mensagem isolada só com o código Pix
+window.abrirWhatsAppOS = function(json) {
+  const os = JSON.parse(decodeURIComponent(json));
+  const foneLimpo = os.telefone.replace(/\D/g, '');
+  const fone = foneLimpo.startsWith('55') ? foneLimpo : `55${foneLimpo}`;
+  const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
+  const pgts = extrairPagamentosDaOS(os);
+  const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+  const falta = Math.max(total - pago, 0);
 
-          <div id="checklist-items-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-            <div>
-              <label class="block text-slate-400 mb-0.5">Tela / Touch</label>
-              <select id="chk-tela" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Funcionando</option>
-                <option value="Trincada / Riscada">Trincada / Riscada</option>
-                <option value="Sem Imagem / Falha">Sem Imagem / Falha</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Câmeras (F/T)</label>
-              <select id="chk-cameras" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Funcionando</option>
-                <option value="Com Defeito">Com Defeito / Embaçada</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Botões Físicos</label>
-              <select id="chk-botoes" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Funcionando</option>
-                <option value="Com Defeito">Afundado / Falhando</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Wi-Fi / Rede</label>
-              <select id="chk-wifi" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Conectando</option>
-                <option value="Sem Sinal">Sem Sinal / Falha</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Conector Carga</label>
-              <select id="chk-carga" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Carregando</option>
-                <option value="Com Folga / Não Carrega">Folga / Não Carrega</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Áudio / Mic</label>
-              <select id="chk-audio" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Funcionando</option>
-                <option value="Sem Som / Chiado">Sem Som / Chiado</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Biometria / FaceID</label>
-              <select id="chk-biometria" class="form-input py-1 text-[11px]">
-                <option value="OK">OK / Funcionando</option>
-                <option value="Indisponível">Indisponível / Falha</option>
-                <option value="Não Testado">Não Testado</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-slate-400 mb-0.5">Carcaça / Tampa</label>
-              <select id="chk-carcaca" class="form-input py-1 text-[11px]">
-                <option value="Intacta">Intacta / Marcas uso</option>
-                <option value="Quebrada / Empenada">Quebrada / Empenada</option>
-              </select>
-            </div>
-          </div>
-        </div>
+  let resumoPagto = `*Valor Total:* ${formatarMoeda(total)}`;
+  if (pgts.length > 0) {
+    const listaStr = pgts.map(p => `  - ${p.forma}: ${formatarMoeda(p.valor)} (${formatarDataHoraCurta(p.data_hora)})`).join('\n');
+    resumoPagto += `\n*Pagamentos Registrados:*\n${listaStr}\n*Saldo Restante:* ${formatarMoeda(falta)}`;
+  }
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label class="block text-slate-400 mb-1">Defeito Relatado</label>
-            <textarea id="os-defeito" rows="2" required class="form-input"></textarea>
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1">Diagnóstico Técnico / Solução</label>
-            <textarea id="os-laudo" rows="2" placeholder="Ex: Troca de conector e restauração de trilha" class="form-input"></textarea>
-          </div>
-        </div>
+  let payloadPix = null;
+  let avisoPix = '';
+  if (falta > 0) {
+    payloadPix = PixGenerator.gerarPayload(falta, `OS${String(os.numero_sequencial).padStart(3, '0')}`);
+    if (payloadPix) {
+      avisoPix = `\n\n_Para pagar o saldo de ${formatarMoeda(falta)} via Pix, basta copiar o código isolado da mensagem abaixo e colar na opção "Pix Copia e Cola" do seu banco._`;
+    }
+  }
 
-        <!-- VALORES DO SERVIÇO -->
-        <div class="grid grid-cols-3 gap-3 pt-2 border-t border-slate-700/60">
-          <div>
-            <label class="block text-slate-400 mb-1">Custo Peça (R$)</label>
-            <input type="number" step="0.01" id="os-custo-peca" value="0.00" class="form-input">
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1">Mão de Obra (R$)</label>
-            <input type="number" step="0.01" id="os-mao-obra" value="0.00" class="form-input">
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1 font-semibold text-cyan-400">Total OS (R$)</label>
-            <input type="text" id="os-valor-total" readonly class="form-input bg-slate-900/50 font-bold text-cyan-400">
-          </div>
-        </div>
+  const msgResumo =
+      `*CODE & FIX - Assistência Técnica*\n\n` +
+      `Olá, *${os.cliente}*!\n` +
+      `Status do seu aparelho (*${os.aparelho}*): *${os.status}*\n\n` +
+      `*Diagnóstico:* ${os.laudo || 'Em análise'}\n` +
+      `${resumoPagto}${avisoPix}\n\n` +
+      `Garantia legal de 90 dias após a retirada. Qualquer dúvida estamos à disposição!`;
 
-        <!-- CONTROLE DE MÚLTIPLOS PAGAMENTOS COM DATA E HORA -->
-        <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700/80 space-y-3">
-          <div class="flex flex-wrap justify-between items-center gap-2 border-b border-slate-700/60 pb-2">
-            <span class="text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
-              <i data-lucide="wallet" class="w-3.5 h-3.5"></i>
-              Recebimentos & Parcelas da OS
-            </span>
-            <div class="flex flex-wrap items-center gap-3 text-[11px] font-mono">
-              <span class="text-slate-400">Pago: <strong id="os-resumo-pago" class="text-emerald-400">R$ 0,00</strong></span>
-              <span class="text-slate-400">Falta: <strong id="os-resumo-falta" class="text-amber-400">R$ 0,00</strong></span>
-              <button type="button" id="btn-gerar-pix-modal" class="px-2 py-0.5 bg-teal-600/30 hover:bg-teal-600/50 text-teal-300 border border-teal-500/40 rounded font-sans font-semibold flex items-center gap-1 transition">
-                <i data-lucide="qr-code" class="w-3 h-3"></i> Cobrar via Pix
-              </button>
-            </div>
-          </div>
+  window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msgResumo)}`, '_blank');
 
-          <!-- Formulário para Adicionar/Editar um Recebimento -->
-          <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end bg-slate-950/60 p-2.5 rounded-lg border border-slate-800">
-            <input type="hidden" id="pagto-edit-index" value="-1">
-              <div class="sm:col-span-4">
-                <label class="block text-slate-400 mb-0.5 text-[10px]">Data e Hora</label>
-                <input type="datetime-local" id="pagto-data-hora" class="form-input py-1 text-[11px]">
-              </div>
-              <div class="sm:col-span-4">
-                <label class="block text-slate-400 mb-0.5 text-[10px]">Forma de Pagamento</label>
-                <select id="pagto-forma" class="form-input py-1 text-[11px]">
-                  <option value="Pix">Pix</option>
-                  <option value="Dinheiro">Dinheiro</option>
-                  <option value="Cartão Débito">Cartão Débito</option>
-                  <option value="Cartão Crédito">Cartão Crédito</option>
-                  <option value="Transferência / TED">Transferência / TED</option>
-                </select>
-              </div>
-              <div class="sm:col-span-2">
-                <label class="block text-slate-400 mb-0.5 text-[10px]">Valor (R$)</label>
-                <input type="number" step="0.01" id="pagto-valor" placeholder="0.00" class="form-input py-1 text-[11px] text-emerald-400 font-semibold">
-              </div>
-              <div class="sm:col-span-2 flex gap-1">
-                <button type="button" id="btn-salvar-parcela" class="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold text-[11px] transition">
-                  + Add
-                </button>
-                <button type="button" id="btn-cancelar-edicao-parcela" title="Cancelar edição" class="hidden px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-[11px]">
-                  ✕
-                </button>
-              </div>
-          </div>
+  // Dispara a segunda aba/janela com o código Pix puro para facilitar o toque e cópia
+  if (payloadPix) {
+    setTimeout(() => {
+      window.open(`https://wa.me/${fone}?text=${encodeURIComponent(payloadPix)}`, '_blank');
+    }, 800);
+  }
+};
 
-          <!-- Lista de Recebimentos Registrados nesta OS -->
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-[11px]">
-              <thead class="text-slate-400 border-b border-slate-800 text-[10px] uppercase">
-              <tr>
-                <th class="py-1.5 px-2">Data / Hora</th>
-                <th class="py-1.5 px-2">Forma</th>
-                <th class="py-1.5 px-2">Valor</th>
-                <th class="py-1.5 px-2 text-center">Livro Caixa</th>
-                <th class="py-1.5 px-2 text-right">Ações</th>
-              </tr>
-              </thead>
-              <tbody id="lista-pagamentos-os-body" class="divide-y divide-slate-800/80"></tbody>
-            </table>
-          </div>
-        </div>
+window.imprimirOS = function(json, numero) {
+  const os = JSON.parse(decodeURIComponent(json));
+  const pecas = parseFloat(os.custo_peca || 0);
+  const mo = parseFloat(os.mao_obra || 0);
+  const total = pecas + mo;
+  const pgts = extrairPagamentosDaOS(os);
+  const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+  const restante = Math.max(total - pago, 0);
 
-        <!-- Assinatura Digital -->
-        <div class="space-y-1 pt-1">
-          <div class="flex justify-between items-center">
-            <label class="text-slate-400">Assinatura do Cliente (Concordância Checklist / Retirada)</label>
-            <button type="button" id="btn-clear-sig" class="text-[10px] text-rose-400 hover:underline">Limpar Traço</button>
-          </div>
-          <div class="border border-slate-700 rounded-lg bg-slate-950 overflow-hidden">
-            <canvas id="signature-pad" width="550" height="100" class="w-full touch-none cursor-crosshair"></canvas>
-          </div>
-        </div>
+  document.getElementById('rec-id').textContent = String(numero).padStart(3, '0');
+  document.getElementById('rec-data').textContent = formatarDataHoraISO(os.created_at);
+  document.getElementById('rec-cliente').textContent = os.cliente;
+  document.getElementById('rec-telefone').textContent = os.telefone;
+  document.getElementById('rec-aparelho').textContent = os.aparelho;
+  document.getElementById('rec-defeito').textContent = os.defeito;
+  document.getElementById('rec-laudo').textContent = os.laudo || 'Em análise técnica';
+  document.getElementById('rec-checklist').textContent = formatarChecklistTexto(os.checklist);
 
-        <div class="pt-3 border-t border-slate-700 flex justify-end space-x-2">
-          <button type="button" class="btn-close-modal px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200">Cancelar</button>
-          <button type="submit" class="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold">Salvar OS</button>
-        </div>
-    </form>
-  </div>
-</div>
+  document.getElementById('rec-pecas').textContent = pecas.toFixed(2);
+  document.getElementById('rec-mao-obra').textContent = mo.toFixed(2);
+  document.getElementById('rec-total').textContent = total.toFixed(2);
 
-<!-- MODAL: COBRANÇA PIX (QR CODE + COPIA E COLA) -->
-<div id="modal-pix" class="modal-backdrop hidden">
-  <div class="bg-slate-800 border border-slate-700 w-full max-w-sm rounded-2xl p-6 space-y-4 text-xs">
-    <div class="flex justify-between items-center border-b border-slate-700 pb-3">
-      <h3 class="text-sm font-semibold text-teal-400 flex items-center gap-2">
-        <i data-lucide="qr-code" class="w-4 h-4"></i>
-        <span>Cobrança Instantânea via Pix</span>
-      </h3>
-      <button type="button" id="btn-fechar-modal-pix" class="text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
-    </div>
+  const divListaPg = document.getElementById('rec-lista-pagamentos');
+  if (pgts.length > 0) {
+    divListaPg.innerHTML = '<strong>Histórico de Pagamentos:</strong><br>' +
+        pgts.map(p => `• ${formatarDataHoraCurta(p.data_hora)} — ${p.forma}: R$ ${parseFloat(p.valor).toFixed(2)}`).join('<br>');
+  } else {
+    divListaPg.innerHTML = '<strong>Pagamentos:</strong> Pendente';
+  }
 
-    <div class="space-y-3">
-      <div class="bg-slate-900/70 p-2.5 rounded-lg border border-slate-700/70">
-        <p class="text-slate-400 text-[11px]">Cliente: <strong id="pix-modal-cliente" class="text-slate-200"></strong></p>
-        <p class="text-slate-400 text-[11px]">Referência: <strong id="pix-modal-ref" class="text-cyan-400"></strong></p>
-      </div>
+  document.getElementById('rec-valor-pago').textContent = pago.toFixed(2);
+  document.getElementById('rec-saldo-restante').textContent = restante.toFixed(2);
 
-      <div>
-        <label class="block text-slate-400 mb-1">Valor a Cobrar no QR Code (R$)</label>
-        <input type="number" step="0.01" id="pix-modal-valor" class="form-input text-base font-bold text-emerald-400">
-      </div>
+  const pixBox = document.getElementById('rec-pix-box');
+  const pixQrDiv = document.getElementById('rec-pix-qrcode');
+  pixQrDiv.innerHTML = '';
 
-      <!-- Container onde o QR Code será desenhado -->
-      <div class="flex flex-col items-center justify-center bg-white p-4 rounded-xl mx-auto w-fit shadow-inner">
-        <div id="pix-qrcode-canvas"></div>
-      </div>
+  if (restante > 0 && window.QRCode) {
+    const payload = PixGenerator.gerarPayload(restante, `OS${String(numero).padStart(3, '0')}`);
+    if (payload) {
+      new QRCode(pixQrDiv, {
+        text: payload,
+        width: 85,
+        height: 85,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.L
+      });
+      pixBox.style.display = 'block';
+    } else {
+      pixBox.style.display = 'none';
+    }
+  } else {
+    pixBox.style.display = 'none';
+  }
 
-      <div>
-        <label class="block text-slate-400 mb-1">Código Pix Copia e Cola</label>
-        <div class="flex gap-1.5">
-          <input type="text" id="pix-copia-cola-texto" readonly class="form-input font-mono text-[10px] bg-slate-950 text-slate-300">
-            <button type="button" id="btn-copiar-pix" class="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-semibold whitespace-nowrap transition">
-              Copiar
-            </button>
-        </div>
-      </div>
+  const sigImg = document.getElementById('rec-signature-img');
+  const sigBlank = document.getElementById('rec-signature-blank');
+  if (os.assinatura) {
+    sigImg.src = os.assinatura;
+    sigImg.style.display = 'block';
+    sigBlank.style.display = 'none';
+  } else {
+    sigImg.style.display = 'none';
+    sigBlank.style.display = 'block';
+  }
 
-      <button type="button" id="btn-enviar-pix-whatsapp" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition">
-        <i data-lucide="message-circle" class="w-4 h-4"></i>
-        <span>Enviar Código Pix Isolado no WhatsApp</span>
-      </button>
-    </div>
-  </div>
-</div>
+  document.body.classList.remove('printing-report');
+  document.body.classList.add('printing-receipt');
+  window.print();
+};
 
-<!-- MODAL: LANÇAMENTO CAIXA -->
-<div id="modal-caixa" class="modal-backdrop hidden">
-  <div class="bg-slate-800 border border-slate-700 w-full max-w-md rounded-2xl p-6 space-y-4 text-xs">
-    <div class="flex justify-between items-center border-b border-slate-700 pb-3">
-      <h3 class="text-sm font-semibold text-slate-100">Novo Lançamento Financeiro</h3>
-      <button class="btn-close-modal text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
-    </div>
+async function exportarCSV() {
+  const caixa = await DataService.getCaixa();
+  if (caixa.length === 0) return alert('Sem dados para exportar.');
+  let csv = 'data:text/csv;charset=utf-8,Data;Tipo;Categoria;Descricao;Valor\n';
+  caixa.forEach(r => { csv += `${r.data};${r.tipo};${r.categoria};"${r.descricao}";${r.valor}\n`; });
+  const link = document.createElement('a');
+  link.setAttribute('href', encodeURI(csv));
+  link.setAttribute('download', `code_and_fix_livro_caixa.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
 
-    <form id="form-caixa" class="space-y-3.5">
-      <input type="hidden" id="caixa-id">
-        <div>
-          <label class="block text-slate-400 mb-1">Tipo</label>
-          <select id="caixa-tipo" class="form-input">
-            <option value="entrada">Entrada (Serviço / Venda)</option>
-            <option value="saida">Saída (Despesa / Peça / DAS)</option>
-          </select>
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Categoria Fiscal</label>
-          <select id="caixa-categoria" class="form-input">
-            <option value="Serviço de Bancada">Serviço de Bancada</option>
-            <option value="Compra de Peças / Telas">Compra de Peças / Telas</option>
-            <option value="Insumos (Estanho/Fluxo/Fita)">Insumos (Estanho/Fluxo/Fita)</option>
-            <option value="Ferramental de Bancada">Ferramental de Bancada</option>
-            <option value="Guia DAS-MEI">Guia DAS-MEI</option>
-            <option value="Retirada Pró-Labore / Lucro">Retirada Pró-Labore / Lucro</option>
-          </select>
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Descrição</label>
-          <input type="text" id="caixa-descricao" required placeholder="Ex: Tela Original Fornecedor" class="form-input">
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-slate-400 mb-1">Data</label>
-            <input type="date" id="caixa-data" required class="form-input">
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1">Valor (R$)</label>
-            <input type="number" step="0.01" id="caixa-valor" required placeholder="0.00" class="form-input">
-          </div>
-        </div>
-        <div class="pt-3 border-t border-slate-700 flex justify-end space-x-2">
-          <button type="button" class="btn-close-modal px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200">Cancelar</button>
-          <button type="submit" class="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold">Salvar</button>
-        </div>
-    </form>
-  </div>
-</div>
+function inicializarGrafico() {
+  const ctx = document.getElementById('chart-fluxo').getContext('2d');
+  fluxoChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['Mês Atual'],
+      datasets: [
+        { label: 'Entradas', data: [0], backgroundColor: '#34d399' },
+        { label: 'Saídas', data: [0], backgroundColor: '#f87171' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { grid: { color: 'rgba(51, 65, 85, 0.3)' }, ticks: { color: '#94a3b8' } },
+        x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+      },
+      plugins: { legend: { labels: { color: '#cbd5e1' } } }
+    }
+  });
+}
 
-<!-- MODAL: CONFIGURAÇÃO SUPABASE & CHAVE PIX -->
-<div id="modal-sync" class="modal-backdrop hidden">
-  <div class="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 space-y-4 text-xs max-h-[90vh] overflow-y-auto">
-    <div class="flex justify-between items-center border-b border-slate-700 pb-3">
-      <h3 class="text-sm font-semibold text-slate-100 flex items-center space-x-2">
-        <i data-lucide="settings" class="w-4 h-4 text-cyan-400"></i>
-        <span>Configurações da Nuvem & Recebimento Pix</span>
-      </h3>
-      <button class="btn-close-modal text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
-    </div>
-    <form id="form-supabase-config" class="space-y-4">
-      <div class="space-y-2.5">
-        <h4 class="text-[11px] font-semibold text-cyan-400 uppercase tracking-wider">1. Banco de Dados (Supabase)</h4>
-        <div>
-          <label class="block text-slate-400 mb-1">Project URL</label>
-          <input type="text" id="supabase-url" placeholder="https://xyz.supabase.co" class="form-input">
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Anon Public Key</label>
-          <input type="password" id="supabase-key" placeholder="eyJhbGciOi..." class="form-input">
-        </div>
-      </div>
+function atualizarGrafico(e, s) {
+  if (!fluxoChartInstance) return;
+  fluxoChartInstance.data.datasets[0].data = [e];
+  fluxoChartInstance.data.datasets[1].data = [s];
+  fluxoChartInstance.update();
+}
 
-      <div class="space-y-2.5 pt-3 border-t border-slate-700">
-        <h4 class="text-[11px] font-semibold text-teal-400 uppercase tracking-wider">2. Dados para Gerador de QR Code Pix</h4>
-        <div>
-          <label class="block text-slate-400 mb-1">Sua Chave Pix (CNPJ, E-mail, Celular c/ +55 ou Chave Aleatória)</label>
-          <input type="text" id="config-pix-chave" placeholder="Ex: 00000000000199 ou +5519981586973" class="form-input">
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-slate-400 mb-1">Nome do Recebedor (sem acentos)</label>
-            <input type="text" id="config-pix-nome" value="CODE & FIX" maxlength="25" class="form-input">
-          </div>
-          <div>
-            <label class="block text-slate-400 mb-1">Cidade (sem acentos)</label>
-            <input type="text" id="config-pix-cidade" value="LIMEIRA" maxlength="15" class="form-input">
-          </div>
-        </div>
-      </div>
+function formatarMoeda(v) {
+  return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
 
-      <div class="pt-3 border-t border-slate-700 flex justify-between items-center">
-        <button type="button" id="btn-clear-supabase" class="text-rose-400 hover:underline">Limpar Nuvem e Usar Local</button>
-        <button type="submit" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold">Salvar Configurações</button>
-      </div>
-    </form>
-  </div>
-</div>
+function formatarData(d) {
+  if (!d) return '--/--/----';
+  const [ano, mes, dia] = d.split('-');
+  return `${dia}/${mes}/${ano}`;
+}
 
-<!-- RECIBO INDIVIDUAL PARA IMPRESSÃO -->
-<div id="receipt-print-area" class="hidden">
-  <div class="receipt-container">
-    <div class="receipt-header">
-      <h2>CODE & FIX - ASSISTÊNCIA TÉCNICA</h2>
-      <p>Smartphones, Informática e Microeletrônica</p>
-      <p class="receipt-id">ORDEM DE SERVIÇO Nº <span id="rec-id">000</span> — Data: <span id="rec-data">--/--/----</span></p>
-    </div>
-    <hr>
-      <div class="receipt-section">
-        <p><strong>Cliente:</strong> <span id="rec-cliente"></span> | <strong>Tel:</strong> <span id="rec-telefone"></span></p>
-        <p><strong>Aparelho:</strong> <span id="rec-aparelho"></span></p>
-        <p><strong>Defeito Declarado:</strong> <span id="rec-defeito"></span></p>
-        <p><strong>Solução Técnica:</strong> <span id="rec-laudo"></span></p>
-      </div>
-      <hr>
-        <div class="receipt-section" style="font-size: 11px;">
-          <p><strong>CHECKLIST DE ENTRADA:</strong> <span id="rec-checklist"></span></p>
-        </div>
-        <hr>
-          <div class="receipt-section" style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
-            <div>
-              <p><strong>Custo Peças:</strong> R$ <span id="rec-pecas">0,00</span> | <strong>Mão de Obra:</strong> R$ <span id="rec-mao-obra">0,00</span></p>
-              <p class="receipt-total"><strong>VALOR TOTAL: R$ <span id="rec-total">0,00</span></strong></p>
-              <div id="rec-lista-pagamentos" style="margin-top: 6px; font-size: 11px;"></div>
-              <p style="margin-top: 4px;"><strong>Total Pago:</strong> R$ <span id="rec-valor-pago">0,00</span> | <strong>Saldo Restante:</strong> R$ <span id="rec-saldo-restante">0,00</span></p>
-            </div>
-            <!-- QR Code Pix no Recibo caso haja saldo restante -->
-            <div id="rec-pix-box" style="display: none; text-align: center; border: 1px solid #ccc; padding: 6px;">
-              <div id="rec-pix-qrcode"></div>
-              <span style="font-size: 9px; display: block; margin-top: 3px;">Pague via Pix</span>
-            </div>
-          </div>
-          <hr>
-            <div class="receipt-warranty">
-              <h4>TERMO DE GARANTIA LEGAL (90 DIAS)</h4>
-              <p>Conforme o Art. 26 da Lei nº 8.078/1990 (CDC), este estabelecimento assegura garantia de 90 dias sobre as peças e serviços discriminados. Aparelhos entregues desligados não permitem testes prévios de periféricos na recepção. Danos por contato com líquidos, quedas ou intervenção de terceiros invalidam este termo.</p>
-            </div>
-            <div class="receipt-signatures">
-              <div class="signature-line">Code & Fix - Técnico</div>
-              <div class="signature-line">
-                <img id="rec-signature-img" src="" alt="Assinatura Cliente" style="max-height: 45px; margin: 0 auto; display: none;">
-                  <div id="rec-signature-blank" style="height: 45px;"></div>
-                  <span>Assinatura do Cliente</span>
-              </div>
-            </div>
-  </div>
-</div>
+function formatarDataHoraISO(isoStr) {
+  if (!isoStr) return '--/--/----';
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return '--/--/----';
+  return d.toLocaleDateString('pt-BR');
+}
 
-<!-- RELATÓRIO GERAL DE OS PARA IMPRESSÃO -->
-<div id="report-print-area" class="hidden">
-  <div class="report-container">
-    <div class="report-header">
-      <h2>CODE & FIX - RELATÓRIO DE ORDENS DE SERVIÇO</h2>
-      <p id="rep-periodo">Período: Todos os registros</p>
-      <p style="font-size: 10px; margin-top: 4px;">Gerado em: <span id="rep-gerado-em"></span></p>
-    </div>
-    <table class="report-table">
-      <thead>
-      <tr>
-        <th>OS</th>
-        <th>Data</th>
-        <th>Cliente</th>
-        <th>Aparelho</th>
-        <th>Status</th>
-        <th>Pagamentos</th>
-        <th style="text-align: right;">Total</th>
-        <th style="text-align: right;">Pago</th>
-        <th style="text-align: right;">Falta</th>
-      </tr>
-      </thead>
-      <tbody id="rep-tabela-body"></tbody>
-    </table>
-    <div class="report-totals">
-      <p>Qtd OS: <strong id="rep-total-qtd">0</strong></p>
-      <p>Total Geral: <strong id="rep-total-geral">R$ 0,00</strong></p>
-      <p>Total Recebido: <strong id="rep-total-pago">R$ 0,00</strong></p>
-      <p>Saldo a Receber: <strong id="rep-total-falta">R$ 0,00</strong></p>
-    </div>
-  </div>
-</div>
+function formatarDataHoraCurta(dtStr) {
+  if (!dtStr) return '--/-- --:--';
+  const partes = dtStr.split('T');
+  if (partes.length < 2) return formatarData(dtStr);
+  const [ano, mes, dia] = partes[0].split('-');
+  const hora = partes[1].slice(0, 5);
+  return `${dia}/${mes}/${ano} ${hora}`;
+}
 
-<script src="js/supabase-client.js"></script>
-<script src="js/app.js"></script>
-</body>
-</html>
+function obterCorTextoStatus(status) {
+  switch (status) {
+    case 'Em Análise': return 'text-amber-400 border-amber-500/30';
+    case 'Aguardando Aprovação': return 'text-blue-400 border-blue-500/30';
+    case 'Aguardando Peça': return 'text-orange-400 border-orange-500/30';
+    case 'Pronto para Retirada': return 'text-emerald-400 border-emerald-500/30';
+    case 'Entregue / Concluído': return 'text-cyan-400 border-cyan-500/30';
+    default: return 'text-slate-300';
+  }
+}
