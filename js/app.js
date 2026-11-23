@@ -1,6 +1,6 @@
 /**
  * App - Controlador Central com Gerador Oficial de QR Code Pix (BR Code / CRC16),
- * Envio Isolado no WhatsApp, Múltiplos Pagamentos e Checklist
+ * Envio em Duas Mensagens no WhatsApp, Múltiplos Pagamentos e Checklist
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
@@ -200,18 +200,27 @@ class SignaturePad {
 document.addEventListener('DOMContentLoaded', async () => {
   if (window.lucide) lucide.createIcons();
 
-  signaturePadInstance = new SignaturePad('signature-pad', 'btn-clear-sig');
-  const isCloud = DataService.init();
+  // Registra os eventos da UI primeiro para nunca bloquear os botões de login/offline
+  configurarEventosUI();
 
-  const logged = await DataService.checkSession();
-  if (logged) {
-    mostrarAppPrincipal(true);
-  } else if (!isCloud) {
-    mostrarAppPrincipal(false);
+  try {
+    signaturePadInstance = new SignaturePad('signature-pad', 'btn-clear-sig');
+    inicializarGrafico();
+  } catch (err) {
+    console.warn('Aviso ao iniciar componentes visuais:', err);
   }
 
-  inicializarGrafico();
-  configurarEventosUI();
+  try {
+    const isCloud = DataService.init();
+    const logged = await DataService.checkSession();
+    if (logged) {
+      mostrarAppPrincipal(true);
+    } else if (!isCloud) {
+      mostrarAppPrincipal(false);
+    }
+  } catch (err) {
+    console.error('Erro na verificação de sessão:', err);
+  }
 });
 
 function mostrarAppPrincipal(isCloud) {
@@ -315,7 +324,7 @@ function configurarEventosUI() {
   document.getElementById('btn-nova-os').addEventListener('click', () => {
     document.getElementById('form-os').reset();
     document.getElementById('os-id').value = '';
-    signaturePadInstance.clear();
+    if (signaturePadInstance) signaturePadInstance.clear();
     document.getElementById('os-custo-peca').value = '0.00';
     document.getElementById('os-mao-obra').value = '0.00';
     document.getElementById('os-valor-total').value = '0.00';
@@ -365,14 +374,27 @@ function configurarEventosUI() {
     setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
   });
 
-  // Envia APENAS o código Pix Copia e Cola isolado para facilitar o toque e cópia no celular
+  // Envia em 2 mensagens separadas no WhatsApp: 1ª texto explicativo, 2ª código Pix puro
   document.getElementById('btn-enviar-pix-whatsapp').addEventListener('click', () => {
     const codigoPix = document.getElementById('pix-copia-cola-texto').value;
     if (!codigoPix) return;
+
+    const valorCobrado = parseFloat(document.getElementById('pix-modal-valor').value) || 0;
     const foneLimpo = contextoPixAtual.telefone.replace(/\D/g, '');
     const fone = foneLimpo.startsWith('55') ? foneLimpo : `55${foneLimpo}`;
 
-    window.open(`https://wa.me/${fone}?text=${encodeURIComponent(codigoPix)}`, '_blank');
+    const msgIntro =
+        `*CODE & FIX - Pagamento via Pix*\n\n` +
+        `Olá, *${contextoPixAtual.cliente}*!\n` +
+        `Segue o código *Pix Copia e Cola* referente ao serviço (*${contextoPixAtual.aparelho}* - ${contextoPixAtual.numeroOS}):\n\n` +
+        `*Valor:* ${formatarMoeda(valorCobrado)}\n\n` +
+        `Copie o código abaixo e cole na área *Pix Copia e Cola* do aplicativo do seu banco:`;
+
+    window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msgIntro)}`, '_blank');
+
+    setTimeout(() => {
+      window.open(`https://wa.me/${fone}?text=${encodeURIComponent(codigoPix)}`, '_blank');
+    }, 800);
   });
 
   // Adicionar ou Salvar Edição de uma Parcela de Pagamento dentro da OS
@@ -463,7 +485,7 @@ function configurarEventosUI() {
         : 'Pendente';
 
     const idExistente = document.getElementById('os-id').value;
-    const assinaturaData = signaturePadInstance.getDataURL();
+    const assinaturaData = signaturePadInstance ? signaturePadInstance.getDataURL() : null;
 
     const osData = {
       cliente: document.getElementById('os-cliente').value,
@@ -1074,10 +1096,12 @@ window.editarOS = function(json) {
 
   preencherChecklistNoModal(os.checklist);
 
-  if (os.assinatura) {
-    signaturePadInstance.loadDataURL(os.assinatura);
-  } else {
-    signaturePadInstance.clear();
+  if (signaturePadInstance) {
+    if (os.assinatura) {
+      signaturePadInstance.loadDataURL(os.assinatura);
+    } else {
+      signaturePadInstance.clear();
+    }
   }
 
   document.getElementById('modal-os-title').textContent = 'Editar Ordem de Serviço';
@@ -1182,7 +1206,6 @@ window.abrirWhatsAppOS = function(json) {
 
   window.open(`https://wa.me/${fone}?text=${encodeURIComponent(msgResumo)}`, '_blank');
 
-  // Dispara a segunda aba/janela com o código Pix puro para facilitar o toque e cópia
   if (payloadPix) {
     setTimeout(() => {
       window.open(`https://wa.me/${fone}?text=${encodeURIComponent(payloadPix)}`, '_blank');
