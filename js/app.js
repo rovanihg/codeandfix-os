@@ -1,11 +1,14 @@
 /**
- * App - Controlador Central com Checklist de Entrada, Pagamentos e Relatórios
+ * App - Controlador Central com Múltiplos Pagamentos (Data/Hora), Edição e Envio Individual ao Caixa
  */
 let signaturePadInstance = null;
 let fluxoChartInstance = null;
 
 let todasAsOrdens = [];
 let ordensFiltradasAtual = [];
+
+// Lista temporária de pagamentos da OS aberta no modal
+let pagamentosAtuaisOS = [];
 
 class SignaturePad {
   constructor(canvasId, clearBtnId) {
@@ -132,6 +135,12 @@ function atualizarIndicadorConexao(isCloud) {
   }
 }
 
+function obterDataHoraAtualInput() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 16);
+}
+
 function configurarEventosUI() {
   // Login
   document.getElementById('form-login').addEventListener('submit', async (e) => {
@@ -194,7 +203,7 @@ function configurarEventosUI() {
   document.getElementById('btn-exportar-os-csv').addEventListener('click', exportarRelatorioOSCSV);
   document.getElementById('btn-imprimir-relatorio-os').addEventListener('click', imprimirRelatorioOS);
 
-  // Atalho no Checklist: Se marcar "Aparelho entrou desligado", muda todos os periféricos para "Não Testado"
+  // Atalho Checklist Desligado
   document.getElementById('chk-aparelho-desligado').addEventListener('change', (e) => {
     const isDesligado = e.target.checked;
     const itens = ['chk-tela', 'chk-cameras', 'chk-botoes', 'chk-wifi', 'chk-carga', 'chk-audio', 'chk-biometria'];
@@ -212,38 +221,56 @@ function configurarEventosUI() {
     document.getElementById('os-custo-peca').value = '0.00';
     document.getElementById('os-mao-obra').value = '0.00';
     document.getElementById('os-valor-total').value = '0.00';
-    document.getElementById('os-forma-pagamento').value = 'Pendente';
-    document.getElementById('os-valor-pago').value = '0.00';
-    document.getElementById('os-saldo-restante').value = '0.00';
+
+    // Limpa pagamentos temporários
+    pagamentosAtuaisOS = [];
+    resetarFormParcela();
+    renderizarListaPagamentosModal();
+    calcularTotaisOS();
+
     resetarChecklistPadrao();
     document.getElementById('modal-os-title').textContent = 'Nova Ordem de Serviço';
     document.getElementById('modal-os').classList.remove('hidden');
   });
 
-  // Atalho: Lançar Valor Pago da OS direto no Livro Caixa
-  document.getElementById('btn-lancar-caixa-rapido').addEventListener('click', async () => {
-    const valorPago = parseFloat(document.getElementById('os-valor-pago').value) || 0;
-    const cliente = document.getElementById('os-cliente').value || 'Cliente';
-    const aparelho = document.getElementById('os-aparelho').value || 'Aparelho';
-    const forma = document.getElementById('os-forma-pagamento').value;
+  // Adicionar ou Salvar Edição de uma Parcela de Pagamento dentro da OS
+  document.getElementById('btn-salvar-parcela').addEventListener('click', () => {
+    const dataHora = document.getElementById('pagto-data-hora').value || obterDataHoraAtualInput();
+    const forma = document.getElementById('pagto-forma').value;
+    const valor = parseFloat(document.getElementById('pagto-valor').value) || 0;
+    const editIdx = parseInt(document.getElementById('pagto-edit-index').value, 10);
 
-    if (valorPago <= 0) {
-      alert('Informe um Valor Pago maior que R$ 0,00 para lançar no caixa.');
+    if (valor <= 0) {
+      alert('Informe um valor válido maior que R$ 0,00.');
       return;
     }
 
-    if (confirm(`Deseja registrar uma ENTRADA de ${formatarMoeda(valorPago)} (${forma}) referente a ${cliente} no Livro Caixa?`)) {
-      const tx = {
-        tipo: 'entrada',
-        categoria: 'Serviço de Bancada',
-        descricao: `Pagto OS (${forma}) - ${cliente} (${aparelho})`,
-        data: new Date().toISOString().split('T')[0],
-        valor: valorPago
+    if (editIdx >= 0 && pagamentosAtuaisOS[editIdx]) {
+      // Atualiza parcela existente preservando o status lancado_caixa
+      pagamentosAtuaisOS[editIdx] = {
+        ...pagamentosAtuaisOS[editIdx],
+        data_hora: dataHora,
+        forma: forma,
+        valor: valor
       };
-      await DataService.saveLancamento(tx);
-      alert('Entrada lançada com sucesso no Livro Caixa MEI!');
-      await carregarTudo();
+    } else {
+      // Adiciona nova parcela (ainda não lançada no Livro Caixa)
+      pagamentosAtuaisOS.push({
+        id: Date.now().toString(),
+        data_hora: dataHora,
+        forma: forma,
+        valor: valor,
+        lancado_caixa: false
+      });
     }
+
+    resetarFormParcela();
+    renderizarListaPagamentosModal();
+    calcularTotaisOS();
+  });
+
+  document.getElementById('btn-cancelar-edicao-parcela').addEventListener('click', () => {
+    resetarFormParcela();
   });
 
   // Modal Novo Lançamento Caixa
@@ -272,31 +299,22 @@ function configurarEventosUI() {
     });
   });
 
-  // Cálculo em tempo real: Total OS e Saldo Restante
-  const calcularFinanceiroOS = () => {
-    const peca = parseFloat(document.getElementById('os-custo-peca').value) || 0;
-    const mo = parseFloat(document.getElementById('os-mao-obra').value) || 0;
-    const pago = parseFloat(document.getElementById('os-valor-pago').value) || 0;
-
-    const total = peca + mo;
-    const restante = Math.max(total - pago, 0);
-
-    document.getElementById('os-valor-total').value = total.toFixed(2);
-    document.getElementById('os-saldo-restante').value = restante.toFixed(2);
-  };
-
-  document.getElementById('os-custo-peca').addEventListener('input', calcularFinanceiroOS);
-  document.getElementById('os-mao-obra').addEventListener('input', calcularFinanceiroOS);
-  document.getElementById('os-valor-pago').addEventListener('input', calcularFinanceiroOS);
+  // Recalcular totais ao alterar peças ou mão de obra
+  document.getElementById('os-custo-peca').addEventListener('input', calcularTotaisOS);
+  document.getElementById('os-mao-obra').addEventListener('input', calcularTotaisOS);
 
   // Submissão OS
   document.getElementById('form-os').addEventListener('submit', async (e) => {
     e.preventDefault();
     const p = parseFloat(document.getElementById('os-custo-peca').value) || 0;
     const m = parseFloat(document.getElementById('os-mao-obra').value) || 0;
-    const pago = parseFloat(document.getElementById('os-valor-pago').value) || 0;
     const total = p + m;
-    const restante = Math.max(total - pago, 0);
+
+    const totalPago = pagamentosAtuaisOS.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+    const restante = Math.max(total - totalPago, 0);
+    const formasResumo = pagamentosAtuaisOS.length > 0
+        ? [...new Set(pagamentosAtuaisOS.map(item => item.forma))].join(' + ')
+        : 'Pendente';
 
     const idExistente = document.getElementById('os-id').value;
     const assinaturaData = signaturePadInstance.getDataURL();
@@ -311,9 +329,10 @@ function configurarEventosUI() {
       custo_peca: p,
       mao_obra: m,
       total: total,
-      valor_pago: pago,
-      forma_pagamento: document.getElementById('os-forma-pagamento').value,
+      valor_pago: totalPago,
+      forma_pagamento: formasResumo,
       saldo_restante: restante,
+      pagamentos: pagamentosAtuaisOS,
       checklist: capturarChecklist(),
       assinatura: assinaturaData
     };
@@ -367,6 +386,140 @@ function configurarEventosUI() {
   });
 
   document.getElementById('btn-exportar-csv').addEventListener('click', exportarCSV);
+}
+
+// ==========================================================================
+// GERENCIAMENTO DE MÚLTIPLOS PAGAMENTOS NA OS
+// ==========================================================================
+function resetarFormParcela() {
+  document.getElementById('pagto-edit-index').value = '-1';
+  document.getElementById('pagto-data-hora').value = obterDataHoraAtualInput();
+  document.getElementById('pagto-forma').value = 'Pix';
+  document.getElementById('pagto-valor').value = '';
+  document.getElementById('btn-salvar-parcela').textContent = '+ Add';
+  document.getElementById('btn-cancelar-edicao-parcela').classList.add('hidden');
+}
+
+function calcularTotaisOS() {
+  const peca = parseFloat(document.getElementById('os-custo-peca').value) || 0;
+  const mo = parseFloat(document.getElementById('os-mao-obra').value) || 0;
+  const total = peca + mo;
+
+  const totalPago = pagamentosAtuaisOS.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
+  const restante = Math.max(total - totalPago, 0);
+
+  document.getElementById('os-valor-total').value = total.toFixed(2);
+  document.getElementById('os-resumo-pago').textContent = formatarMoeda(totalPago);
+  document.getElementById('os-resumo-falta').textContent = formatarMoeda(restante);
+}
+
+function renderizarListaPagamentosModal() {
+  const tbody = document.getElementById('lista-pagamentos-os-body');
+  tbody.innerHTML = '';
+
+  if (pagamentosAtuaisOS.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="py-3 text-center text-slate-500">Nenhum pagamento registrado nesta OS ainda.</td></tr>`;
+    return;
+  }
+
+  pagamentosAtuaisOS.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-800/40';
+
+    const dataFormatada = formatarDataHoraCurta(p.data_hora);
+    const statusCaixaHTML = p.lancado_caixa
+        ? `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-semibold">✓ No Caixa</span>`
+        : `<button type="button" onclick="enviarParcelaParaCaixa(${idx})" class="px-2 py-0.5 rounded bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-400 border border-cyan-500/30 text-[9px] font-semibold transition">Lançar no Caixa</button>`;
+
+    tr.innerHTML = `
+      <td class="py-1.5 px-2 font-mono text-slate-300 text-[10px]">${dataFormatada}</td>
+      <td class="py-1.5 px-2 font-medium text-slate-200">${p.forma}</td>
+      <td class="py-1.5 px-2 font-mono text-emerald-400 font-semibold">${formatarMoeda(p.valor)}</td>
+      <td class="py-1.5 px-2 text-center">${statusCaixaHTML}</td>
+      <td class="py-1.5 px-2 text-right space-x-1">
+        <button type="button" onclick="editarParcelaOS(${idx})" title="Editar Pagamento" class="p-0.5 text-slate-400 hover:text-cyan-400">
+          <i data-lucide="edit-2" class="w-3.5 h-3.5 inline"></i>
+        </button>
+        <button type="button" onclick="removerParcelaOS(${idx})" title="Remover Pagamento" class="p-0.5 text-slate-400 hover:text-rose-400">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i>
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  if (window.lucide) lucide.createIcons();
+}
+
+window.editarParcelaOS = function(idx) {
+  const p = pagamentosAtuaisOS[idx];
+  if (!p) return;
+
+  document.getElementById('pagto-edit-index').value = idx;
+  document.getElementById('pagto-data-hora').value = p.data_hora || obterDataHoraAtualInput();
+  document.getElementById('pagto-forma').value = p.forma;
+  document.getElementById('pagto-valor').value = parseFloat(p.valor).toFixed(2);
+
+  document.getElementById('btn-salvar-parcela').textContent = 'Salvar';
+  document.getElementById('btn-cancelar-edicao-parcela').classList.remove('hidden');
+};
+
+window.removerParcelaOS = function(idx) {
+  if (confirm('Deseja remover este registro de pagamento da OS?')) {
+    pagamentosAtuaisOS.splice(idx, 1);
+    resetarFormParcela();
+    renderizarListaPagamentosModal();
+    calcularTotaisOS();
+  }
+};
+
+window.enviarParcelaParaCaixa = async function(idx) {
+  const p = pagamentosAtuaisOS[idx];
+  if (!p || p.lancado_caixa) return;
+
+  const cliente = document.getElementById('os-cliente').value || 'Cliente';
+  const aparelho = document.getElementById('os-aparelho').value || 'Aparelho';
+  const dataApenas = (p.data_hora || new Date().toISOString()).split('T')[0];
+
+  if (confirm(`Deseja lançar ${formatarMoeda(p.valor)} (${p.forma}) no Livro Caixa agora?`)) {
+    const tx = {
+      tipo: 'entrada',
+      categoria: 'Serviço de Bancada',
+      descricao: `Pagto OS (${p.forma}) - ${cliente} (${aparelho})`,
+      data: dataApenas,
+      valor: parseFloat(p.valor)
+    };
+
+    await DataService.saveLancamento(tx);
+    pagamentosAtuaisOS[idx].lancado_caixa = true;
+
+    // Se a OS já existir no banco, salva a flag imediatamente para não perder
+    const idOS = document.getElementById('os-id').value;
+    if (idOS) {
+      await DataService.saveOS({ id: idOS, pagamentos: pagamentosAtuaisOS });
+    }
+
+    renderizarListaPagamentosModal();
+    await carregarTudo();
+  }
+};
+
+function extrairPagamentosDaOS(os) {
+  // Suporta o novo array 'pagamentos' e faz migração transparente caso a OS antiga só tenha 'valor_pago'
+  if (Array.isArray(os.pagamentos) && os.pagamentos.length > 0) {
+    return JSON.parse(JSON.stringify(os.pagamentos));
+  }
+  const valorAntigo = parseFloat(os.valor_pago || 0);
+  if (valorAntigo > 0) {
+    return [{
+      id: 'legacy-1',
+      data_hora: os.created_at ? os.created_at.slice(0, 16) : obterDataHoraAtualInput(),
+      forma: os.forma_pagamento || 'Pix',
+      valor: valorAntigo,
+      lancado_caixa: false
+    }];
+  }
+  return [];
 }
 
 // ==========================================================================
@@ -471,7 +624,8 @@ function atualizarResumoFiltroOS(lista) {
 
   lista.forEach(os => {
     const tot = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
-    const pg = parseFloat(os.valor_pago || 0);
+    const pgts = extrairPagamentosDaOS(os);
+    const pg = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
     const flt = Math.max(tot - pg, 0);
 
     somaTotal += tot;
@@ -491,15 +645,19 @@ function exportarRelatorioOSCSV() {
     return;
   }
 
-  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Checklist;Forma_Pagto;Total;Valor_Pago;Saldo_Restante\n';
+  let csv = 'data:text/csv;charset=utf-8,OS;Data;Cliente;Telefone;Aparelho;Status;Detalhe_Pagamentos;Total;Valor_Pago;Saldo_Restante\n';
   ordensFiltradasAtual.forEach(os => {
     const dataFmt = formatarDataHoraISO(os.created_at);
     const total = (parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0)).toFixed(2);
-    const pago = parseFloat(os.valor_pago || 0).toFixed(2);
+    const pgts = extrairPagamentosDaOS(os);
+    const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0).toFixed(2);
     const falta = Math.max(total - pago, 0).toFixed(2);
-    const chkTexto = formatarChecklistTexto(os.checklist);
 
-    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${chkTexto}";"${os.forma_pagamento || 'Pendente'}";${total};${pago};${falta}\n`;
+    const detalhePg = pgts.length > 0
+        ? pgts.map(p => `${formatarDataHoraCurta(p.data_hora)} - ${p.forma}: R$${parseFloat(p.valor).toFixed(2)}`).join(' | ')
+        : 'Pendente';
+
+    csv += `#${String(os.numero_sequencial).padStart(3, '0')};${dataFmt};"${os.cliente}";${os.telefone};"${os.aparelho}";"${os.status}";"${detalhePg}";${total};${pago};${falta}\n`;
   });
 
   const link = document.createElement('a');
@@ -525,8 +683,13 @@ function imprimirRelatorioOS() {
 
   ordensFiltradasAtual.forEach(os => {
     const tot = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
-    const pg = parseFloat(os.valor_pago || 0);
+    const pgts = extrairPagamentosDaOS(os);
+    const pg = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
     const flt = Math.max(tot - pg, 0);
+
+    const formasResumo = pgts.length > 0
+        ? pgts.map(p => `${p.forma} (${formatarMoeda(p.valor)})`).join(', ')
+        : 'Pendente';
 
     somaGeral += tot;
     somaPago += pg;
@@ -539,7 +702,7 @@ function imprimirRelatorioOS() {
       <td>${os.cliente}</td>
       <td>${os.aparelho}</td>
       <td>${os.status}</td>
-      <td>${os.forma_pagamento || 'Pendente'}</td>
+      <td>${formasResumo}</td>
       <td style="text-align: right;">${formatarMoeda(tot)}</td>
       <td style="text-align: right;">${formatarMoeda(pg)}</td>
       <td style="text-align: right;"><strong>${formatarMoeda(flt)}</strong></td>
@@ -624,17 +787,26 @@ function renderizarTabelaOS(ordens) {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-800/40 transition';
     const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
-    const pago = parseFloat(os.valor_pago || 0);
+    const pgts = extrairPagamentosDaOS(os);
+    const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
     const falta = Math.max(total - pago, 0);
     const dataAbertura = formatarDataHoraISO(os.created_at);
+
+    // Resumo visual das parcelas na tabela
+    let detalheParcelas = '';
+    if (pgts.length > 0) {
+      detalheParcelas = `<div class="text-[10px] text-slate-400 mt-1 space-y-0.5">` +
+          pgts.map(p => `<div>• ${p.forma}: ${formatarMoeda(p.valor)} <span class="text-slate-500">(${formatarDataHoraCurta(p.data_hora)})</span></div>`).join('') +
+          `</div>`;
+    }
 
     let badgeFinanceiro = '';
     if (total === 0) {
       badgeFinanceiro = `<span class="text-[10px] text-slate-500">Orçamento R$ 0,00</span>`;
     } else if (falta <= 0) {
-      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">Quitado (${os.forma_pagamento || 'Pago'})</span>`;
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">Quitado</span>`;
     } else if (pago > 0) {
-      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-semibold">Pago ${formatarMoeda(pago)} | Falta ${formatarMoeda(falta)}</span>`;
+      badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-semibold">Falta ${formatarMoeda(falta)}</span>`;
     } else {
       badgeFinanceiro = `<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-semibold">Pendente</span>`;
     }
@@ -654,11 +826,14 @@ function renderizarTabelaOS(ordens) {
         </select>
       </td>
       <td class="p-3.5">
-        <div class="font-mono font-semibold text-slate-100 mb-1">${formatarMoeda(total)}</div>
-        <div>${badgeFinanceiro}</div>
+        <div class="flex items-center gap-2">
+          <span class="font-mono font-semibold text-slate-100">${formatarMoeda(total)}</span>
+          ${badgeFinanceiro}
+        </div>
+        ${detalheParcelas}
       </td>
       <td class="p-3.5 text-right space-x-1">
-        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Checklist / Pagamento" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
+        <button onclick="editarOS('${encodeURIComponent(JSON.stringify(os))}')" title="Editar OS / Lançar Pagamentos" class="p-1 hover:text-cyan-400"><i data-lucide="edit-3" class="w-4 h-4 inline"></i></button>
         <button onclick="abrirWhatsAppOS('${encodeURIComponent(JSON.stringify(os))}')" title="Notificar WhatsApp" class="p-1 hover:text-emerald-400"><i data-lucide="message-circle" class="w-4 h-4 inline"></i></button>
         <button onclick="imprimirOS('${encodeURIComponent(JSON.stringify(os))}', ${os.numero_sequencial})" title="Imprimir Recibo" class="p-1 hover:text-slate-300"><i data-lucide="printer" class="w-4 h-4 inline"></i></button>
         <button onclick="excluirOS('${os.id}')" title="Excluir OS" class="p-1 hover:text-rose-400"><i data-lucide="trash-2" class="w-4 h-4 inline"></i></button>
@@ -673,9 +848,6 @@ window.editarOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
   const peca = parseFloat(os.custo_peca || 0);
   const mo = parseFloat(os.mao_obra || 0);
-  const total = peca + mo;
-  const pago = parseFloat(os.valor_pago || 0);
-  const restante = Math.max(total - pago, 0);
 
   document.getElementById('os-id').value = os.id || '';
   document.getElementById('os-cliente').value = os.cliente || '';
@@ -686,11 +858,12 @@ window.editarOS = function(json) {
   document.getElementById('os-laudo').value = os.laudo || '';
   document.getElementById('os-custo-peca').value = peca.toFixed(2);
   document.getElementById('os-mao-obra').value = mo.toFixed(2);
-  document.getElementById('os-valor-total').value = total.toFixed(2);
 
-  document.getElementById('os-forma-pagamento').value = os.forma_pagamento || 'Pendente';
-  document.getElementById('os-valor-pago').value = pago.toFixed(2);
-  document.getElementById('os-saldo-restante').value = restante.toFixed(2);
+  // Carrega os pagamentos da OS no modal
+  pagamentosAtuaisOS = extrairPagamentosDaOS(os);
+  resetarFormParcela();
+  renderizarListaPagamentosModal();
+  calcularTotaisOS();
 
   preencherChecklistNoModal(os.checklist);
 
@@ -771,14 +944,14 @@ window.abrirWhatsAppOS = function(json) {
   const os = JSON.parse(decodeURIComponent(json));
   const fone = os.telefone.startsWith('55') ? os.telefone : `55${os.telefone}`;
   const total = parseFloat(os.custo_peca || 0) + parseFloat(os.mao_obra || 0);
-  const pago = parseFloat(os.valor_pago || 0);
+  const pgts = extrairPagamentosDaOS(os);
+  const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
   const falta = Math.max(total - pago, 0);
 
   let resumoPagto = `*Valor Total:* ${formatarMoeda(total)}`;
-  if (pago > 0 && falta > 0) {
-    resumoPagto += `\n*Sinal Pago (${os.forma_pagamento}):* ${formatarMoeda(pago)}\n*Saldo na Retirada:* ${formatarMoeda(falta)}`;
-  } else if (falta <= 0 && total > 0) {
-    resumoPagto += `\n*Status Pagto:* Quitado (${os.forma_pagamento})`;
+  if (pgts.length > 0) {
+    const listaStr = pgts.map(p => `  - ${p.forma}: ${formatarMoeda(p.valor)} (${formatarDataHoraCurta(p.data_hora)})`).join('\n');
+    resumoPagto += `\n*Pagamentos Registrados:*\n${listaStr}\n*Saldo Restante:* ${formatarMoeda(falta)}`;
   }
 
   const msg =
@@ -796,7 +969,8 @@ window.imprimirOS = function(json, numero) {
   const pecas = parseFloat(os.custo_peca || 0);
   const mo = parseFloat(os.mao_obra || 0);
   const total = pecas + mo;
-  const pago = parseFloat(os.valor_pago || 0);
+  const pgts = extrairPagamentosDaOS(os);
+  const pago = pgts.reduce((acc, item) => acc + parseFloat(item.valor || 0), 0);
   const restante = Math.max(total - pago, 0);
 
   document.getElementById('rec-id').textContent = String(numero).padStart(3, '0');
@@ -811,7 +985,15 @@ window.imprimirOS = function(json, numero) {
   document.getElementById('rec-pecas').textContent = pecas.toFixed(2);
   document.getElementById('rec-mao-obra').textContent = mo.toFixed(2);
   document.getElementById('rec-total').textContent = total.toFixed(2);
-  document.getElementById('rec-forma-pagto').textContent = os.forma_pagamento || 'Pendente';
+
+  const divListaPg = document.getElementById('rec-lista-pagamentos');
+  if (pgts.length > 0) {
+    divListaPg.innerHTML = '<strong>Histórico de Pagamentos:</strong><br>' +
+        pgts.map(p => `• ${formatarDataHoraCurta(p.data_hora)} — ${p.forma}: R$ ${parseFloat(p.valor).toFixed(2)}`).join('<br>');
+  } else {
+    divListaPg.innerHTML = '<strong>Pagamentos:</strong> Pendente';
+  }
+
   document.getElementById('rec-valor-pago').textContent = pago.toFixed(2);
   document.getElementById('rec-saldo-restante').textContent = restante.toFixed(2);
 
@@ -889,6 +1071,15 @@ function formatarDataHoraISO(isoStr) {
   const d = new Date(isoStr);
   if (isNaN(d.getTime())) return '--/--/----';
   return d.toLocaleDateString('pt-BR');
+}
+
+function formatarDataHoraCurta(dtStr) {
+  if (!dtStr) return '--/-- --:--';
+  const partes = dtStr.split('T');
+  if (partes.length < 2) return formatarData(dtStr);
+  const [ano, mes, dia] = partes[0].split('-');
+  const hora = partes[1].slice(0, 5);
+  return `${dia}/${mes}/${ano} ${hora}`;
 }
 
 function obterCorTextoStatus(status) {
